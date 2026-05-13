@@ -53,6 +53,21 @@ Example config file:
 config.example.yaml
 ```
 
+Config loading behavior:
+
+```text
+1. Start from built-in defaults.
+2. Load YAML values on top of those defaults.
+3. Validate final values.
+```
+
+Important rule:
+
+```text
+- Omitted fields use defaults.
+- Explicit YAML values are preserved and validated (they are not overwritten by a second default pass).
+```
+
 The agent must not hardcode NATS servers, subject patterns, KV bucket names, target name, renderer mode, apply mode, enabled actions, or state file paths in code. These values must come from YAML configuration.
 
 ## Local state
