@@ -12,13 +12,14 @@ set -euo pipefail
 # Command executed:
 # go run ./cmd/vyos-nats-agent \
 #   --config ./config.example.yaml \
-#   --validate-config \
-#   --print-effective-config
+#   --validate-config
 #
 # Expected success indicator:
 # configuration valid
+#
+# To inspect sanitized effective config manually:
+# go run ./cmd/vyos-nats-agent --config ./config.example.yaml --print-effective-config --validate-config
 
 go run ./cmd/vyos-nats-agent \
   --config ./config.example.yaml \
-  --validate-config \
-  --print-effective-config
+  --validate-config

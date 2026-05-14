@@ -28,7 +28,7 @@ func DefaultAppConfig() AppConfig {
 				Servers:              []string{"nats://127.0.0.1:4222"},
 				ClientName:           "vyos-nats-agent",
 				ConnectTimeout:       "5s",
-				RetryOnFailedConnect: true,
+				RetryOnFailedConnect: false,
 				MaxReconnects:        -1,
 				ReconnectWait:        "2s",
 			},

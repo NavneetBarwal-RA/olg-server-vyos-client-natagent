@@ -1,6 +1,6 @@
 module github.com/routerarchitects/olg-server-vyos-client-natagent
 
-go 1.26.0
+go 1.25.0
 
 require (
 	github.com/routerarchitects/nats-agent-core v0.0.0-20260512112154-0d99210d6b7a

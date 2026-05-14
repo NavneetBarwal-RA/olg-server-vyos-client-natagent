@@ -38,6 +38,9 @@ func (c AppConfig) Validate() error {
 	if !hasServer {
 		return fmt.Errorf("agentcore.nats.servers must contain at least one non-empty server")
 	}
+	if c.AgentCore.NATS.RetryOnFailedConnect {
+		return fmt.Errorf("agentcore.nats.retry_on_failed_connect is not supported in this phase")
+	}
 
 	if strings.TrimSpace(c.AgentCore.Subjects.ConfigurePattern) == "" {
 		return fmt.Errorf("agentcore.subjects.configure_pattern is required")
@@ -114,6 +117,9 @@ func parseDurationField(fieldName, raw string, optional bool) (time.Duration, er
 	d, err := time.ParseDuration(trimmed)
 	if err != nil {
 		return 0, fmt.Errorf("%s is not a valid duration: %w", fieldName, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s must not be negative", fieldName)
 	}
 	return d, nil
 }
