@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 func (c AppConfig) Validate() error {
@@ -41,31 +42,66 @@ func (c AppConfig) Validate() error {
 	if c.AgentCore.NATS.RetryOnFailedConnect {
 		return fmt.Errorf("agentcore.nats.retry_on_failed_connect is not supported in this phase")
 	}
+	if c.AgentCore.NATS.MaxReconnects < -1 {
+		return fmt.Errorf("agentcore.nats.max_reconnects must be -1 or greater")
+	}
+	if c.AgentCore.NATS.ReconnectBufSize < 0 {
+		return fmt.Errorf("agentcore.nats.reconnect_buf_size must not be negative")
+	}
 
-	if strings.TrimSpace(c.AgentCore.Subjects.ConfigurePattern) == "" {
-		return fmt.Errorf("agentcore.subjects.configure_pattern is required")
+	subjectRules := []struct {
+		field        string
+		pattern      string
+		placeholders int
+	}{
+		{
+			field:        "agentcore.subjects.configure_pattern",
+			pattern:      c.AgentCore.Subjects.ConfigurePattern,
+			placeholders: 1,
+		},
+		{
+			field:        "agentcore.subjects.action_pattern",
+			pattern:      c.AgentCore.Subjects.ActionPattern,
+			placeholders: 2,
+		},
+		{
+			field:        "agentcore.subjects.result_pattern",
+			pattern:      c.AgentCore.Subjects.ResultPattern,
+			placeholders: 1,
+		},
+		{
+			field:        "agentcore.subjects.status_pattern",
+			pattern:      c.AgentCore.Subjects.StatusPattern,
+			placeholders: 1,
+		},
+		{
+			field:        "agentcore.subjects.health_pattern",
+			pattern:      c.AgentCore.Subjects.HealthPattern,
+			placeholders: 1,
+		},
 	}
-	if strings.TrimSpace(c.AgentCore.Subjects.ActionPattern) == "" {
-		return fmt.Errorf("agentcore.subjects.action_pattern is required")
-	}
-	if strings.TrimSpace(c.AgentCore.Subjects.ResultPattern) == "" {
-		return fmt.Errorf("agentcore.subjects.result_pattern is required")
-	}
-	if strings.TrimSpace(c.AgentCore.Subjects.StatusPattern) == "" {
-		return fmt.Errorf("agentcore.subjects.status_pattern is required")
-	}
-	if strings.TrimSpace(c.AgentCore.Subjects.HealthPattern) == "" {
-		return fmt.Errorf("agentcore.subjects.health_pattern is required")
+	for _, rule := range subjectRules {
+		if err := validateSubjectPattern(rule.field, rule.pattern, rule.placeholders); err != nil {
+			return err
+		}
 	}
 
 	if strings.TrimSpace(c.AgentCore.KV.Bucket) == "" {
 		return fmt.Errorf("agentcore.kv.bucket is required")
 	}
-	if strings.TrimSpace(c.AgentCore.KV.KeyPattern) == "" {
-		return fmt.Errorf("agentcore.kv.key_pattern is required")
+	if err := validateKeyPattern(c.AgentCore.KV.KeyPattern); err != nil {
+		return err
 	}
-	if c.AgentCore.KV.History == 0 {
-		return fmt.Errorf("agentcore.kv.history must be greater than zero")
+	if c.AgentCore.KV.History < 1 || c.AgentCore.KV.History > 64 {
+		return fmt.Errorf("agentcore.kv.history must be between 1 and 64")
+	}
+	if c.AgentCore.KV.MaxValueSize < 0 {
+		return fmt.Errorf("agentcore.kv.max_value_size must not be negative")
+	}
+	switch c.AgentCore.KV.Storage {
+	case "file", "memory":
+	default:
+		return fmt.Errorf("agentcore.kv.storage must be either file or memory")
 	}
 	if c.AgentCore.KV.Replicas < 1 {
 		return fmt.Errorf("agentcore.kv.replicas must be at least 1")
@@ -102,6 +138,67 @@ func (c AppConfig) Validate() error {
 		return err
 	}
 
+	return nil
+}
+
+func validateSubjectPattern(fieldName string, pattern string, placeholders int) error {
+	trimmed := strings.TrimSpace(pattern)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required", fieldName)
+	}
+	if err := validateNoWhitespace(fieldName, trimmed); err != nil {
+		return err
+	}
+	if strings.ContainsAny(trimmed, "*>") {
+		return fmt.Errorf("%s must not contain wildcard tokens * or >", fieldName)
+	}
+	if err := validateFormatPlaceholders(fieldName, trimmed, placeholders); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateKeyPattern(pattern string) error {
+	fieldName := "agentcore.kv.key_pattern"
+	trimmed := strings.TrimSpace(pattern)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required", fieldName)
+	}
+	if err := validateNoWhitespace(fieldName, trimmed); err != nil {
+		return err
+	}
+	if err := validateFormatPlaceholders(fieldName, trimmed, 1); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNoWhitespace(fieldName string, value string) error {
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return fmt.Errorf("%s must not contain whitespace", fieldName)
+	}
+	return nil
+}
+
+func validateFormatPlaceholders(fieldName, value string, placeholders int) error {
+	count := 0
+	for i := 0; i < len(value); i++ {
+		if value[i] != '%' {
+			continue
+		}
+		if i+1 >= len(value) {
+			return fmt.Errorf("%s contains unsupported format directive %%", fieldName)
+		}
+		next := value[i+1]
+		if next != 's' {
+			return fmt.Errorf("%s contains unsupported format directive %%%c", fieldName, next)
+		}
+		count++
+		i++
+	}
+	if count != placeholders {
+		return fmt.Errorf("%s must contain exactly %d %%s placeholder(s)", fieldName, placeholders)
+	}
 	return nil
 }
 

@@ -308,7 +308,7 @@ agent.actions.enabled = ["trace"]
 agentcore.nats.servers = ["nats://127.0.0.1:4222"]
 agentcore.nats.client_name = vyos-nats-agent
 agentcore.nats.connect_timeout = 5s
-agentcore.nats.retry_on_failed_connect = true
+agentcore.nats.retry_on_failed_connect = false
 agentcore.nats.max_reconnects = -1
 agentcore.nats.reconnect_wait = 2s
 
@@ -521,6 +521,8 @@ internal/config/defaults.go
 internal/config/loader.go
 internal/config/validate.go
 internal/config/convert.go
+internal/config/print.go
+internal/config/redact.go
 ```
 
 Do not modify `README.md`, `SPEC.md`, or `config.example.yaml` unless there is a direct mismatch preventing implementation.
