@@ -22,7 +22,6 @@ func (r *Runtime) registerHandlers() error {
 		r.logInfo("action handler registered", "target", target, "action", action)
 	}
 
-	r.handlersRegistered = true
 	return nil
 }
 

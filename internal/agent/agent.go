@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/routerarchitects/nats-agent-core/agentcore"
@@ -20,7 +21,9 @@ type Runtime struct {
 	logger     agentcore.Logger
 	now        func() time.Time
 
-	handlersRegistered bool
+	mu      sync.Mutex
+	started bool
+	closed  bool
 }
 
 type runtimeOptions struct {

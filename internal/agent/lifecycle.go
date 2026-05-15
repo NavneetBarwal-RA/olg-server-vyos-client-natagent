@@ -14,6 +14,35 @@ const (
 	startupCloseTimeout    = 5 * time.Second
 )
 
+// Runtime is single-use. If startup fails, the process should exit and a
+// service supervisor should create a fresh Runtime on restart.
+func (r *Runtime) beginStart() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return errors.New("runtime is closed")
+	}
+	if r.started {
+		return errors.New("runtime already started")
+	}
+
+	r.started = true
+	return nil
+}
+
+func (r *Runtime) markClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return true
+	}
+
+	r.closed = true
+	return false
+}
+
 // Run starts the runtime, waits for shutdown signal via ctx cancellation,
 // and closes the runtime gracefully.
 func (r *Runtime) Run(ctx context.Context) error {
@@ -48,10 +77,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return errors.New("start context is nil")
 	}
 
-	if !r.handlersRegistered {
-		if err := r.registerHandlers(); err != nil {
-			return err
-		}
+	if err := r.beginStart(); err != nil {
+		return err
+	}
+
+	if err := r.registerHandlers(); err != nil {
+		return err
 	}
 
 	r.logInfo("agentcore client starting", "target", r.appConfig.Agent.Target)
@@ -79,6 +110,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 func (r *Runtime) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("close context is nil")
+	}
+	if r.markClosed() {
+		return nil
 	}
 
 	r.logInfo("agentcore client closing", "target", r.appConfig.Agent.Target)
