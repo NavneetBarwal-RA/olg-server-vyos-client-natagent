@@ -187,7 +187,7 @@ agentcore:
     bucket: cfg_desired
     key_pattern: desired.%s
     auto_create_bucket: true
-    history: 5
+    history: 1
     ttl: 0s
     max_value_size: 0
     storage: file
@@ -207,6 +207,10 @@ agentcore:
   execution:
     handler_mode: sync
 ```
+
+For milestone 1, KV history is intentionally `1` because the agent converges from
+the latest desired config UUID and local applied UUID comparison, not historical
+KV revisions.
 
 ## 10. Duration handling
 
@@ -274,7 +278,7 @@ agentcore.subjects.health_pattern = health.%s
 agentcore.kv.bucket = cfg_desired
 agentcore.kv.key_pattern = desired.%s
 agentcore.kv.auto_create_bucket = true
-agentcore.kv.history = 5
+agentcore.kv.history = 1
 agentcore.kv.ttl = 0s
 agentcore.kv.storage = file
 agentcore.kv.replicas = 1
@@ -397,6 +401,22 @@ When the agent receives a configure notification:
    - publish failure result
 ```
 
+### Configure recovery model
+
+Configure notification is only a fast-path trigger.
+
+The durable source of truth is the latest desired config stored in JetStream KV at `desired.<target>`.
+
+The agent must not rely only on receiving `cmd.configure.<target>` notifications for correctness.
+
+If a configure notification is missed, or if `SubmitConfigure` writes KV successfully but fails before publishing the notification, the agent must still converge by:
+
+1. loading the latest desired config from KV during startup reconcile or explicit recover,
+2. comparing desired UUID with the locally applied UUID,
+3. rendering/applying when the desired UUID differs,
+4. updating local applied UUID only after successful apply,
+5. publishing result/status using the desired config metadata where available.
+
 ## 17. Action lifecycle
 
 For milestone 1, only the `trace` action is required.
@@ -498,6 +518,8 @@ Rules:
 - write updates atomically
 - update `applied_uuid` only after successful apply
 - never update applied UUID after render/apply failure
+- milestone 1 converges from only the latest desired config (`history = 1`) and
+  does not depend on historical KV revisions
 
 ## 22. Result publishing
 
@@ -513,7 +535,8 @@ Configure success:
   "command_type": "configure",
   "uuid": "cfg-123",
   "result": "success",
-  "message": "VyOS configuration applied"
+  "message": "VyOS configuration applied",
+  "timestamp": "2026-05-12T10:30:00Z"
 }
 ```
 
@@ -528,7 +551,8 @@ Configure failure:
   "uuid": "cfg-123",
   "result": "failure",
   "error_code": "apply_failed",
-  "message": "VyOS commit failed"
+  "message": "VyOS commit failed",
+  "timestamp": "2026-05-12T10:30:00Z"
 }
 ```
 
@@ -543,7 +567,8 @@ Action success:
   "action": "trace",
   "result": "success",
   "message": "Trace completed",
-  "payload": {}
+  "payload": {},
+  "timestamp": "2026-05-12T10:30:00Z"
 }
 ```
 
@@ -559,7 +584,8 @@ Minimum startup status:
   "target": "vyos",
   "status": "running",
   "stage": "startup",
-  "message": "vyos-nats-agent started"
+  "message": "vyos-nats-agent started",
+  "timestamp": "2026-05-12T10:30:00Z"
 }
 ```
 
@@ -576,7 +602,31 @@ Minimal behavior:
 4. If desired UUID differs, run the same render/apply/result lifecycle.
 ```
 
-If startup reconcile fails, publish degraded/failure status and continue running where reasonable.
+### Startup reconcile failure policy
+
+Startup reconcile runs after `agentcore.Client.Start(ctx)` succeeds.
+
+Fatal startup errors:
+- config path cannot be resolved
+- YAML config cannot be loaded or validated
+- config cannot be converted to `agentcore.Config`
+- `agentcore.Client` cannot be created
+- `agentcore.Client.Start(ctx)` fails
+- local state store cannot be initialized safely
+
+Non-fatal reconcile errors:
+- no desired config exists in KV
+- desired config already matches local applied UUID
+- desired config load times out after startup
+- renderer fails during reconcile
+- apply engine fails during reconcile
+- result/status publish fails after a reconcile attempt
+
+For non-fatal reconcile errors, the agent must:
+1. publish degraded/failure status when possible,
+2. not update local applied UUID unless apply succeeds,
+3. continue running and keep handling future configure notifications/actions,
+4. allow a later startup reconcile or explicit recover path to converge from KV.
 
 ## 25. Handler concurrency
 
