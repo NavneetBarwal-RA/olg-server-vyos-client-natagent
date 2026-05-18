@@ -109,7 +109,9 @@ vyos-nats-agent/
     agent/
       agent.go
       handlers.go
-      publish.go
+      lifecycle.go
+      logging.go
+      status.go
 
     config/
       config.go
@@ -126,15 +128,13 @@ vyos-nats-agent/
       engine.go
       placeholder.go
 
-    actions/
-      trace.go
+    configure/
+      service.go
+      types.go
 
     state/
       store.go
-
-  tests/
-    integration/
-      vyos_agent_e2e_test.go
+      file_store.go
 ```
 
 ## Development phases
@@ -179,9 +179,9 @@ go run ./cmd/vyos-nats-agent --config ./config.example.yaml --validate-config
 go test -count=1 -v -tags=integration ./tests/integration/...
 ```
 
-## Phase 2 smoke scripts
+## Phase smoke scripts
 
-Action smoke:
+Phase 2 action smoke:
 
 ```bash
 ./tests/scripts/phase2-real-nats-action-smoke.sh
@@ -196,13 +196,13 @@ Expected success marker:
 Configure smoke:
 
 ```bash
-./tests/scripts/phase2-real-nats-configure-smoke.sh
+./tests/scripts/phase3-real-nats-configure-smoke.sh
 ```
 
 Expected success marker:
 
 ```text
-[PASS] Phase 2 real-NATS configure smoke test passed
+[PASS] Phase 3 real-NATS configure smoke test passed
 ```
 
 Optional debug output for either smoke script:
@@ -216,9 +216,10 @@ PRINT_LOGS_ON_PASS=true KEEP_SMOKE_ARTIFACTS=true ./tests/scripts/phase2-real-na
 
 ## Binary usage
 
-The current binary supports Phase 2 lifecycle behavior:
+The current binary supports Phase 3 behavior:
 - validation-only mode with safe effective-config printing
 - long-running runtime mode using `nats-agent-core` (`Start`, handler registration, status publish, graceful `Close`)
+- configure workflow using `LoadDesiredConfig(ctx, target)`, placeholder render/apply, and local applied UUID state updates after successful apply
 
 ```bash
 go run ./cmd/vyos-nats-agent --config ./config.example.yaml --validate-config
@@ -243,9 +244,14 @@ The config file path is resolved in this order:
 3. /etc/vyos-nats-agent/config.yaml
 ```
 
-### Current Phase 2 behavior
+### Current Phase 3 behavior
 
 Running without `--validate-config` loads config, converts to `agentcore.Config`, creates the runtime, registers configure/action handlers, starts `agentcore`, publishes startup status, then waits for `SIGINT`/`SIGTERM` and shuts down gracefully.
+
+Configure handling in this phase loads desired config through `LoadDesiredConfig(ctx, target)`, verifies target/UUID, checks local `state_file`, and:
+- publishes `already_in_sync` success when desired UUID already matches local `applied_uuid`
+- otherwise runs placeholder render/apply, updates local state after apply succeeds, and publishes configure success
+- publishes configure failure status/result with stable error codes on workflow failures
 
 `--print-effective-config` prints the effective config as YAML after defaults and YAML overlay. Sensitive values are redacted as `********`, and the converted `agentcore.Config` is not printed.
 
