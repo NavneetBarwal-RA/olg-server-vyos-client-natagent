@@ -113,5 +113,15 @@ func (s *FileStore) Save(ctx context.Context, st State) error {
 		return fmt.Errorf("rename temp state file %q to %q: %w", tmpName, s.path, err)
 	}
 
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open state directory %q for sync: %w", dir, err)
+	}
+	defer dirFile.Close()
+
+	if err := dirFile.Sync(); err != nil {
+		return fmt.Errorf("sync state directory %q: %w", dir, err)
+	}
+
 	return nil
 }

@@ -66,6 +66,17 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 		return errors.New("configure handle: context is nil")
 	}
 
+	started := s.now()
+	defer func() {
+		s.logInfo(
+			"configure processing completed",
+			"target", msg.Target,
+			"rpc_id", msg.RPCID,
+			"uuid", msg.UUID,
+			"duration_ms", s.now().Sub(started).Milliseconds(),
+		)
+	}()
+
 	// Serialize configure processing so local applied UUID load/apply/save remains ordered.
 	// Future multi-target support can replace this with per-target locking.
 	s.mu.Lock()
