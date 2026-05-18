@@ -254,3 +254,29 @@ func TestSaveRejectsEmptyPath(t *testing.T) {
 		t.Fatalf("error %q does not contain file path is empty", err.Error())
 	}
 }
+
+/*
+TC-STATE-STORE-009
+Type: Negative
+Title: Load rejects empty file path
+Summary:
+Constructs store with blank path and calls Load.
+Path validation must reject empty or whitespace-only paths
+before attempting any filesystem read.
+
+Validates:
+  - empty path returns error
+  - error indicates file path is empty
+  - load fails fast for invalid path
+*/
+func TestLoadRejectsEmptyPath(t *testing.T) {
+	store := NewFileStore("   ")
+
+	_, err := store.Load(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "file path is empty") {
+		t.Fatalf("error %q does not contain file path is empty", err.Error())
+	}
+}
