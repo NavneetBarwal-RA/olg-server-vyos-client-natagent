@@ -14,8 +14,9 @@ import (
 )
 
 type fakeConfigureClient struct {
-	desired *agentcore.StoredDesiredConfig
-	loadErr error
+	desired         *agentcore.StoredDesiredConfig
+	desiredByTarget map[string]*agentcore.StoredDesiredConfig
+	loadErr         error
 
 	statusErrByStage map[string]error
 	resultErrByKey   map[string]error
@@ -29,6 +30,9 @@ func (f *fakeConfigureClient) LoadDesiredConfig(ctx context.Context, target stri
 	f.loadCalls++
 	if f.loadErr != nil {
 		return nil, f.loadErr
+	}
+	if f.desiredByTarget != nil {
+		return f.desiredByTarget[target], nil
 	}
 	return f.desired, nil
 }
@@ -58,6 +62,7 @@ type fakeStateStore struct {
 	loadState state.State
 	loadErr   error
 	saveErr   error
+	saveCh    chan string
 
 	loadCalls int
 	saveCalls int
@@ -74,6 +79,9 @@ func (f *fakeStateStore) Load(ctx context.Context) (state.State, error) {
 
 func (f *fakeStateStore) Save(ctx context.Context, st state.State) error {
 	f.saveCalls++
+	if f.saveCh != nil {
+		f.saveCh <- st.AppliedUUID
+	}
 	if f.saveErr != nil {
 		return f.saveErr
 	}
@@ -96,24 +104,47 @@ func (f *fakeRenderer) Render(ctx context.Context, desired agentcore.StoredDesir
 }
 
 type fakeApplyEngine struct {
-	err   error
-	calls int
+	err     error
+	calls   int
+	applyCh chan string
 }
 
 func (f *fakeApplyEngine) Apply(ctx context.Context, rendered renderer.Output) error {
 	f.calls++
+	if f.applyCh != nil {
+		f.applyCh <- rendered.UUID
+	}
 	if f.err != nil {
 		return f.err
 	}
 	return nil
 }
 
+type blockingRenderer struct {
+	firstEntered  chan struct{}
+	secondEntered chan struct{}
+	releaseFirst  <-chan struct{}
+	calls         int
+}
+
+func (b *blockingRenderer) Render(ctx context.Context, desired agentcore.StoredDesiredConfig) (renderer.Output, error) {
+	b.calls++
+	switch b.calls {
+	case 1:
+		close(b.firstEntered)
+		<-b.releaseFirst
+	case 2:
+		close(b.secondEntered)
+	}
+	return renderer.Output{Target: desired.Record.Target, UUID: desired.Record.UUID, Text: "# out"}, nil
+}
+
 func newConfigureServiceForTest(
 	t *testing.T,
 	client *fakeConfigureClient,
 	store *fakeStateStore,
-	rndr *fakeRenderer,
-	apply *fakeApplyEngine,
+	rndr Renderer,
+	apply ApplyEngine,
 	now func() time.Time,
 ) *Service {
 	t.Helper()
@@ -677,5 +708,112 @@ func TestHandleRejectsNilContext(t *testing.T) {
 	}
 	if len(client.statuses) != 0 || len(client.results) != 0 {
 		t.Fatalf("unexpected published output statuses=%d results=%d", len(client.statuses), len(client.results))
+	}
+}
+
+/*
+TC-CONFIGURE-SERVICE-015
+Type: Positive
+Title: Handle serializes concurrent configure processing
+Summary:
+Starts two concurrent Handle calls on the same service while the first call is
+blocked inside renderer. The second call must not enter render/apply/save
+until the first call is explicitly released.
+
+Validates:
+  - first call enters renderer and blocks
+  - second call does not enter render/apply/save before release
+  - both calls complete successfully after release
+  - render apply and save each run twice with ordered saved UUIDs
+*/
+func TestHandleSerializesConcurrentConfigureProcessing(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstRenderEntered := make(chan struct{})
+	secondRenderEntered := make(chan struct{})
+	secondStarted := make(chan struct{})
+	applyCh := make(chan string, 2)
+	saveCh := make(chan string, 2)
+
+	client := &fakeConfigureClient{
+		desiredByTarget: map[string]*agentcore.StoredDesiredConfig{
+			"vyos-a": newDesired("vyos-a", "cfg-15-a"),
+			"vyos-b": newDesired("vyos-b", "cfg-15-b"),
+		},
+	}
+	store := &fakeStateStore{saveCh: saveCh}
+	rndr := &blockingRenderer{
+		firstEntered:  firstRenderEntered,
+		secondEntered: secondRenderEntered,
+		releaseFirst:  firstRelease,
+	}
+	apply := &fakeApplyEngine{applyCh: applyCh}
+	svc := newConfigureServiceForTest(t, client, store, rndr, apply, time.Now)
+
+	msg1 := agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-15-a", Target: "vyos-a", UUID: "cfg-15-a"}
+	msg2 := agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-15-b", Target: "vyos-b", UUID: "cfg-15-b"}
+	errCh := make(chan error, 2)
+
+	go func() {
+		errCh <- svc.Handle(context.Background(), msg1)
+	}()
+
+	select {
+	case <-firstRenderEntered:
+	case <-time.After(1 * time.Second):
+		t.Fatal("first handle did not enter renderer")
+	}
+
+	go func() {
+		close(secondStarted)
+		errCh <- svc.Handle(context.Background(), msg2)
+	}()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(1 * time.Second):
+		t.Fatal("second handle did not start")
+	}
+
+	select {
+	case <-secondRenderEntered:
+		t.Fatal("second handle entered renderer before first release")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case uuid := <-applyCh:
+		t.Fatalf("apply entered before first release (uuid=%s)", uuid)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case uuid := <-saveCh:
+		t.Fatalf("state save entered before first release (uuid=%s)", uuid)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(firstRelease)
+
+	select {
+	case <-secondRenderEntered:
+	case <-time.After(1 * time.Second):
+		t.Fatal("second handle did not enter renderer after first release")
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("first handle: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("second handle: %v", err)
+	}
+
+	if rndr.calls != 2 || apply.calls != 2 || store.saveCalls != 2 {
+		t.Fatalf("calls renderer=%d apply=%d save=%d want 2/2/2", rndr.calls, apply.calls, store.saveCalls)
+	}
+	if len(store.saved) != 2 {
+		t.Fatalf("saved count got=%d want=2", len(store.saved))
+	}
+	if store.saved[0].AppliedUUID != "cfg-15-a" || store.saved[1].AppliedUUID != "cfg-15-b" {
+		t.Fatalf("saved order mismatch got=%q then %q", store.saved[0].AppliedUUID, store.saved[1].AppliedUUID)
 	}
 }
