@@ -31,14 +31,15 @@ NATS_URL="nats://127.0.0.1:${NATS_PORT}"
 PRINT_LOGS_ON_PASS="${PRINT_LOGS_ON_PASS:-false}"      # true|false
 KEEP_SMOKE_ARTIFACTS="${KEEP_SMOKE_ARTIFACTS:-false}"  # true|false
 
-WORK_DIR="$(mktemp -d -t vyos-nats-agent-phase4-XXXXXX)"
+mkdir -p "${ROOT_DIR}/.tmp"
+WORK_DIR="$(mktemp -d "${ROOT_DIR}/.tmp/vyos-nats-agent-phase4-XXXXXX")"
 TMP_CONFIG="${WORK_DIR}/config.yaml"
 NATS_LOG="${WORK_DIR}/nats-server.log"
 AGENT_LOG="${WORK_DIR}/vyos-nats-agent.log"
 CONTROLLER_LOG="${WORK_DIR}/controller.log"
 AGENT_BIN="${WORK_DIR}/vyos-nats-agent"
 READY_FILE="${WORK_DIR}/controller.ready"
-CONTROLLER_DIR="${ROOT_DIR}/.tmp/phase4-action-smoke-controller"
+CONTROLLER_DIR="${WORK_DIR}/controller"
 
 NATS_PID=""
 AGENT_PID=""

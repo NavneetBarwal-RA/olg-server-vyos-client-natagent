@@ -18,7 +18,7 @@ const (
 	wireVersion = "1.0"
 )
 
-// Runtime owns the Phase 2 agent lifecycle around an agentcore.Client.
+// Runtime owns agent lifecycle wiring around an agentcore client and delegates configure/action handling.
 type Runtime struct {
 	appConfig  *config.AppConfig
 	coreConfig agentcore.Config

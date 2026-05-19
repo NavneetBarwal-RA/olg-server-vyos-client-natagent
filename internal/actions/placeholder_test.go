@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -123,8 +124,8 @@ func TestPlaceholderTraceExecutorRejectsCanceledContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), context.Canceled.Error()) {
-		t.Fatalf("error %q does not contain context canceled", err.Error())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled in error chain, got %v", err)
 	}
 }
 
@@ -149,6 +150,7 @@ func TestPlaceholderTraceExecutorRejectsInvalidCommand(t *testing.T) {
 		name          string
 		msg           agentcore.ActionCommand
 		errorContains string
+		isErr         error
 	}{
 		{
 			name: "missing target",
@@ -187,6 +189,7 @@ func TestPlaceholderTraceExecutorRejectsInvalidCommand(t *testing.T) {
 				Payload: json.RawMessage(`not-json`),
 			},
 			errorContains: ErrInvalidActionPayload.Error(),
+			isErr:         ErrInvalidActionPayload,
 		},
 	}
 
@@ -198,6 +201,9 @@ func TestPlaceholderTraceExecutorRejectsInvalidCommand(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.errorContains) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.errorContains)
+			}
+			if tc.isErr != nil && !errors.Is(err, tc.isErr) {
+				t.Fatalf("expected error to wrap %v, got %v", tc.isErr, err)
 			}
 		})
 	}

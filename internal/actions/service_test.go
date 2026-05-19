@@ -304,8 +304,8 @@ func TestHandleCanceledContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), context.Canceled.Error()) {
-		t.Fatalf("error %q does not contain context canceled", err.Error())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled in error chain, got %v", err)
 	}
 	if exec.calls != 0 {
 		t.Fatalf("executor calls got=%d want=0", exec.calls)
