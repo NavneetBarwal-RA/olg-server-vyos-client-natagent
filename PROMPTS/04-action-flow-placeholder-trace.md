@@ -580,22 +580,7 @@ Important:
 - Prefer waiting for NATS log line "Server is ready" over raw /dev/tcp probes to avoid parser ERROR noise.
 ```
 
-If an older `phase2-real-nats-action-smoke.sh` still expects `not_implemented`, update it so it does not fail after Phase 4.
-
-Recommended options:
-
-```text
-Option A:
-  Keep Phase 2 script but make it only verify startup/status/shutdown, not action not_implemented.
-
-Option B:
-  Replace stale action expectations and point users to phase4-real-nats-action-smoke.sh.
-
-Option C:
-  Remove stale Phase 2 action smoke if it is no longer meaningful.
-```
-
-Do not leave scripts in `tests/scripts` that assert the old action `not_implemented` behavior after Phase 4.
+Do not keep stale scripts in `tests/scripts` that assert old action `not_implemented` behavior after Phase 4.
 
 ---
 
@@ -703,12 +688,6 @@ internal/agent/agent.go
 internal/agent/handlers.go
 README.md
 SPEC.md
-```
-
-Possibly changed if stale:
-
-```text
-tests/scripts/phase2-real-nats-action-smoke.sh
 ```
 
 Only update other files if required for compile or focused documentation accuracy.

@@ -2,7 +2,7 @@
 
 `vyos-nats-agent` is a Go daemon that runs inside or near the VyOS environment and uses `nats-agent-core` for NATS, JetStream KV, command handling, and result/status publishing.
 
-The first milestone is intentionally minimal: prove configure lifecycle behavior end to end with placeholder VyOS renderer/apply logic, while keeping action behavior in placeholder mode until a later phase.
+The first milestone is intentionally minimal: prove configure and action lifecycle behavior end to end with placeholder VyOS renderer/apply/action logic.
 
 ## What this agent does
 
@@ -16,7 +16,7 @@ The first milestone is intentionally minimal: prove configure lifecycle behavior
 - Sends the desired payload through a placeholder renderer.
 - Sends rendered config through a placeholder apply engine.
 - Stores the last successfully applied config UUID locally.
-- Publishes placeholder action failure (`not_implemented`) for `trace` in current phase.
+- Publishes placeholder action status/result for `trace`.
 - Publishes result and status messages to the bus.
 
 ## What is out of scope for the first milestone
@@ -179,6 +179,15 @@ go test ./...
 ```
 
 ```bash
+UNFORMATTED=$(gofmt -l $(find . -type f -name '*.go' -not -path './.git/*'))
+test -z "$UNFORMATTED"
+```
+
+```bash
+go build ./...
+```
+
+```bash
 go run ./cmd/vyos-nats-agent --config ./config.example.yaml --validate-config
 ```
 
@@ -223,6 +232,17 @@ Config validation script:
 ```bash
 ./tests/scripts/validate-config.sh
 ```
+
+## CI coverage
+
+`.github/workflows/ci.yml` currently validates:
+
+- `gofmt` formatting check
+- `go test ./...`
+- `go build ./...`
+- `./tests/scripts/validate-config.sh`
+- `./tests/scripts/phase3-real-nats-configure-smoke.sh`
+- `./tests/scripts/phase4-real-nats-action-smoke.sh`
 
 ## Binary usage
 
