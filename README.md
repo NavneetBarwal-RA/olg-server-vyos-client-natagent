@@ -82,7 +82,12 @@ agent:
 
 `placeholder` is the default and uses the internal no-op renderer/apply path. `real` constructs adapters around `olg-renderer-vyos/renderer` and `olg-renderer-vyos/apply`; the NATS agent calls those public APIs and does not execute raw VyOS commands directly.
 
-The `olg-renderer-vyos` dependency is pinned to the released module tag `v0.1.0`.
+Core module dependencies are pinned to released tags:
+
+```text
+github.com/routerarchitects/nats-agent-core v0.1.0
+github.com/routerarchitects/olg-renderer-vyos v0.1.0
+```
 
 Validate real mode on a disposable or lab VyOS target before production rollout.
 

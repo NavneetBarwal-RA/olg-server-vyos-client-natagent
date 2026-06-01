@@ -61,7 +61,7 @@ If your VyOS VM architecture differs, adjust `GOARCH`.
 Copy the binary:
 
 ```bash
-scp ./bin/vyos-nats-agent vyos@<vyos-vm-ip>:/tmp/vyos-nats-agent
+scp ./bin/vyos-nats-agent vyos@<vyos-vm-ip>:~/vyos-nats-agent
 ```
 
 Create a lab config locally:
@@ -92,7 +92,7 @@ agentcore:
 Copy it to the VM:
 
 ```bash
-scp /tmp/vyos-nats-agent-real.yaml vyos@<vyos-vm-ip>:/tmp/vyos-nats-agent.yaml
+scp /tmp/vyos-nats-agent-real.yaml vyos@<vyos-vm-ip>:~/vyos-nats-agent.yaml
 ```
 
 ## 4. Run The Agent On VyOS
@@ -107,8 +107,8 @@ Prepare paths and run:
 
 ```bash
 sudo mkdir -p /config/vyos-nats-agent
-sudo install -m 0755 /tmp/vyos-nats-agent /usr/local/bin/vyos-nats-agent
-sudo /usr/local/bin/vyos-nats-agent --config /tmp/vyos-nats-agent.yaml
+sudo install -m 0755 ~/vyos-nats-agent /usr/local/bin/vyos-nats-agent
+sudo /usr/local/bin/vyos-nats-agent --config ~/vyos-nats-agent.yaml
 ```
 
 Keep this terminal open so you can see logs. In another terminal, run the
@@ -189,5 +189,5 @@ the payload you applied.
 - The agent binary does not directly execute raw VyOS commands. In real mode it
   calls the public `olg-renderer-vyos/renderer` and `olg-renderer-vyos/apply`
   APIs.
-- `olg-renderer-vyos` is resolved through normal Go module dependency
-  management.
+- `nats-agent-core` and `olg-renderer-vyos` are resolved through normal Go
+  module dependency management.

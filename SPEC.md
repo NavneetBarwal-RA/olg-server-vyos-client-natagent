@@ -818,9 +818,10 @@ Implement:
 - `agent.configure.mode: placeholder | real`
 - real renderer adapter using `olg-renderer-vyos/renderer`
 - real apply adapter using `olg-renderer-vyos/apply`
+- dependency on `nats-agent-core` module tag `v0.1.0`
 - dependency on `olg-renderer-vyos` module tag `v0.1.0`
 
-The renderer dependency is resolved through normal Go module resolution.
+The core and renderer dependencies are resolved through normal Go module resolution.
 
 ## 28. Codex implementation rules
 
