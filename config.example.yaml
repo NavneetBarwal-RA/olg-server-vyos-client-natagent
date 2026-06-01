@@ -2,19 +2,22 @@ agent:
   name: vyos-nats-agent
   version: 0.1.0
   target: vyos
-  state_file: /var/lib/vyos-nats-agent/state.json
+  state_file: /tmp/vyos-nats-agent/state.json
 
   logging:
     enabled: true
     level: info
     format: text
 
+  configure:
+    mode: placeholder # placeholder | real
+
   renderer:
     mode: placeholder
 
   apply:
     mode: placeholder
-    save_after_commit: true
+    save_after_commit: false
 
   actions:
     enabled:

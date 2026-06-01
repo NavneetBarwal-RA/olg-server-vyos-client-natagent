@@ -11,18 +11,21 @@ func DefaultAppConfig() AppConfig {
 			Name:      "vyos-nats-agent",
 			Version:   "0.1.0",
 			Target:    "vyos",
-			StateFile: "/var/lib/vyos-nats-agent/state.json",
+			StateFile: "/tmp/vyos-nats-agent/state.json",
 			Logging: LoggingConfig{
 				Enabled: true,
 				Level:   "info",
 				Format:  "text",
+			},
+			Configure: ConfigureConfig{
+				Mode: "placeholder",
 			},
 			Renderer: RendererConfig{
 				Mode: "placeholder",
 			},
 			Apply: ApplyConfig{
 				Mode:            "placeholder",
-				SaveAfterCommit: true,
+				SaveAfterCommit: false,
 			},
 			Actions: ActionsConfig{
 				Enabled: []string{"trace"},

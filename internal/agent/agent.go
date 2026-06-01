@@ -8,9 +8,11 @@ import (
 	"github.com/routerarchitects/nats-agent-core/agentcore"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/actions"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/apply"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/applyvyos"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/config"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/configure"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderer"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderervyos"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/state"
 )
 
@@ -98,8 +100,10 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 	}
 
 	stateStore := state.NewFileStore(appCfg.Agent.StateFile)
-	rendererEngine := renderer.NewPlaceholder()
-	applyEngine := apply.NewPlaceholder()
+	rendererEngine, applyEngine, err := newConfigureEngines(appCfg, options.logger)
+	if err != nil {
+		return nil, err
+	}
 	configureService, err := configure.NewService(configure.Dependencies{
 		Client:      client,
 		StateStore:  stateStore,
@@ -136,4 +140,27 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 	}
 	r.logInfo("agentcore client created", "target", r.appConfig.Agent.Target)
 	return r, nil
+}
+
+func newConfigureEngines(appCfg *config.AppConfig, logger agentcore.Logger) (configure.Renderer, configure.ApplyEngine, error) {
+	if appCfg == nil {
+		return nil, nil, fmt.Errorf("app config is required")
+	}
+
+	switch appCfg.Agent.Configure.Mode {
+	case "placeholder":
+		return renderer.NewPlaceholder(), apply.NewPlaceholder(), nil
+	case "real":
+		rendererEngine, err := renderervyos.New(renderervyos.WithLogger(logger))
+		if err != nil {
+			return nil, nil, fmt.Errorf("create real configure renderer: %w", err)
+		}
+		applyEngine, err := applyvyos.New(appCfg.Agent.Apply.SaveAfterCommit, applyvyos.WithLogger(logger))
+		if err != nil {
+			return nil, nil, fmt.Errorf("create real configure apply engine: %w", err)
+		}
+		return rendererEngine, applyEngine, nil
+	default:
+		return nil, nil, fmt.Errorf("agent.configure.mode must be one of placeholder, real")
+	}
 }

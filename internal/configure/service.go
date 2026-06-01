@@ -105,6 +105,7 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 		return s.fail(ctx, msg, "desired_uuid_mismatch", "desired uuid mismatch", fmt.Errorf("desired uuid %q does not match notification uuid %q", desired.Record.UUID, msg.UUID))
 	}
 	s.logInfo("configure desired loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID)
+	s.logInfo("configure desired payload loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_json", string(desired.Record.Payload))
 
 	localState, err := s.stateStore.Load(ctx)
 	if err != nil {
@@ -133,7 +134,7 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 		return s.fail(ctx, msg, "render_failed", "failed to render desired config", fmt.Errorf("render desired config: %w", err))
 	}
 
-	s.logInfo("configure rendered", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "stage", "rendered")
+	s.logInfo("configure rendered", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "stage", "rendered", "rendered_commands", rendered.Text)
 	if err := s.publishStatus(ctx, msg, "running", "rendered", "desired config rendered"); err != nil {
 		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status rendered: %w", err))
 	}
@@ -148,7 +149,7 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	}
 
 	s.logInfo("configure applied", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "stage", "applied")
-	if err := s.publishStatus(ctx, msg, "success", "applied", "placeholder configure apply completed"); err != nil {
+	if err := s.publishStatus(ctx, msg, "success", "applied", "configure apply completed"); err != nil {
 		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status applied: %w", err))
 	}
 
@@ -163,7 +164,7 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	s.logInfo("configure state saved", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID)
 
 	s.logInfo("configure result publishing", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "status", "success")
-	if err := s.publishSuccessResult(ctx, msg, "placeholder configure apply completed"); err != nil {
+	if err := s.publishSuccessResult(ctx, msg, "configure apply completed"); err != nil {
 		return s.fail(ctx, msg, "result_publish_failed", "failed to publish configure result", fmt.Errorf("publish configure success result: %w", err))
 	}
 	s.logInfo("configure result published", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "status", "success")

@@ -24,6 +24,11 @@ func (c AppConfig) Validate() error {
 	default:
 		return fmt.Errorf("agent.logging.format must be one of text, json")
 	}
+	switch c.Agent.Configure.Mode {
+	case "placeholder", "real":
+	default:
+		return fmt.Errorf("agent.configure.mode must be one of placeholder, real")
+	}
 	if c.Agent.Renderer.Mode != "placeholder" {
 		return fmt.Errorf("agent.renderer.mode must be placeholder")
 	}
