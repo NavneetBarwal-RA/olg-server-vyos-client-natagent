@@ -185,6 +185,26 @@ func TestRenderReturnsWrappedErrors(t *testing.T) {
 	}
 }
 
+/*
+TC-RENDERER-VYOS-006
+Type: Positive
+Title: Command count ignores blank lines
+Summary:
+Counts rendered command text with blank lines and whitespace.
+The helper should count only non-empty command lines for safe
+metadata logging.
+
+Validates:
+  - non-empty command lines are counted
+  - blank and whitespace-only lines are ignored
+*/
+func TestCountNonEmptyLinesIgnoresBlankLines(t *testing.T) {
+	got := countNonEmptyLines("\nset a\n  \nset b\n\t\n")
+	if got != 2 {
+		t.Fatalf("line count got=%d want=2", got)
+	}
+}
+
 func desiredWithPayload(payload string) agentcore.StoredDesiredConfig {
 	return desiredWithRawPayload(json.RawMessage(payload))
 }

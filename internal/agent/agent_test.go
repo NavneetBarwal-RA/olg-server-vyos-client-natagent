@@ -73,6 +73,40 @@ func TestNewConfigureEnginesWiresRealMode(t *testing.T) {
 
 /*
 TC-AGENT-CONFIGURE-003
+Type: Positive
+Title: Real mode accepts debug logging config
+Summary:
+Builds configure engines with real mode and debug log flags enabled.
+Debug settings should be accepted without changing the selected
+renderer and apply adapter implementations.
+
+Validates:
+  - real renderer adapter is still selected
+  - real apply adapter is still selected
+  - debug flags do not break construction
+*/
+func TestNewConfigureEnginesAcceptsDebugLoggingConfig(t *testing.T) {
+	cfg := config.DefaultAppConfig()
+	cfg.Agent.Configure.Mode = "real"
+	cfg.Agent.Logging.Level = "debug"
+	cfg.Agent.Debug.LogPayloads = true
+	cfg.Agent.Debug.LogRendered = true
+	cfg.Agent.Debug.LogApplyPlan = true
+
+	rndr, applier, err := newConfigureEngines(&cfg, nil)
+	if err != nil {
+		t.Fatalf("new configure engines: %v", err)
+	}
+	if _, ok := rndr.(*renderervyos.Adapter); !ok {
+		t.Fatalf("renderer type got=%T want *renderervyos.Adapter", rndr)
+	}
+	if _, ok := applier.(*applyvyos.Adapter); !ok {
+		t.Fatalf("apply type got=%T want *applyvyos.Adapter", applier)
+	}
+}
+
+/*
+TC-AGENT-CONFIGURE-004
 Type: Negative
 Title: Invalid configure mode fails wiring
 Summary:

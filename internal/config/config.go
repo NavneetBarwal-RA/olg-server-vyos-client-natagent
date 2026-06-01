@@ -12,7 +12,7 @@ type AgentConfig struct {
 	StateFile string          `yaml:"state_file"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Configure ConfigureConfig `yaml:"configure"`
-	Renderer  RendererConfig  `yaml:"renderer"`
+	Debug     DebugConfig     `yaml:"debug"`
 	Apply     ApplyConfig     `yaml:"apply"`
 	Actions   ActionsConfig   `yaml:"actions"`
 }
@@ -27,13 +27,14 @@ type ConfigureConfig struct {
 	Mode string `yaml:"mode"`
 }
 
-type RendererConfig struct {
-	Mode string `yaml:"mode"`
+type DebugConfig struct {
+	LogPayloads  bool `yaml:"log_payloads"`
+	LogRendered  bool `yaml:"log_rendered"`
+	LogApplyPlan bool `yaml:"log_apply_plan"`
 }
 
 type ApplyConfig struct {
-	Mode            string `yaml:"mode"`
-	SaveAfterCommit bool   `yaml:"save_after_commit"`
+	SaveAfterCommit bool `yaml:"save_after_commit"`
 }
 
 type ActionsConfig struct {

@@ -66,8 +66,8 @@ The implementation must not hardcode:
 - target name
 - local state path
 - configure backend mode
-- renderer mode
-- apply mode
+- apply save behavior
+- debug logging flags
 - enabled actions
 - timeout values
 - retry values
@@ -131,11 +131,12 @@ agent:
   configure:
     mode: placeholder
 
-  renderer:
-    mode: placeholder
+  debug:
+    log_payloads: false
+    log_rendered: false
+    log_apply_plan: false
 
   apply:
-    mode: placeholder
     save_after_commit: false
 
   actions:
@@ -287,8 +288,9 @@ agent.logging.enabled = true
 agent.logging.level = info
 agent.logging.format = text
 agent.configure.mode = placeholder
-agent.renderer.mode = placeholder
-agent.apply.mode = placeholder
+agent.debug.log_payloads = false
+agent.debug.log_rendered = false
+agent.debug.log_apply_plan = false
 agent.apply.save_after_commit = false
 agent.actions.enabled = [trace]
 
@@ -341,8 +343,6 @@ The config loader must reject:
 - empty status subject pattern
 - invalid duration strings
 - unsupported configure mode
-- unsupported renderer mode
-- unsupported apply mode
 - unsupported action names
 - unsupported logging level
 - unsupported logging format
@@ -354,12 +354,14 @@ For milestone 1, supported values are:
 
 ```text
 configure.mode = placeholder | real
-renderer.mode = placeholder
-apply.mode = placeholder
 actions.enabled = trace
 ```
 
 `configure.mode = placeholder` is the default and is the only mode used by normal CI smoke tests. `configure.mode = real` wires adapters around `olg-renderer-vyos/renderer` and `olg-renderer-vyos/apply`; the NATS agent must not execute raw VyOS commands directly.
+
+`agent.configure.mode` is the single source of truth for configure backend selection. `agent.apply.save_after_commit` only controls whether the real apply backend saves committed VyOS configuration.
+
+Full desired payload, rendered command, and apply-plan logging is disabled by default. It is lab/debug-only and requires `agent.logging.level = debug` plus the relevant `agent.debug.*` flag.
 
 ## 14. Runtime config package
 

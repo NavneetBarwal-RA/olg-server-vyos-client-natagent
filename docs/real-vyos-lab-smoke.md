@@ -186,6 +186,9 @@ the payload you applied.
 
 - Normal CI must keep using `agent.configure.mode: placeholder`.
 - This script intentionally requires `REAL_VYOS_LAB_ACK=I_UNDERSTAND`.
+- Full payload/rendered/apply-plan logs are disabled by default. For temporary
+  lab debugging, set `agent.logging.level: debug` and enable the specific
+  `agent.debug.*` flags needed for the run.
 - The agent binary does not directly execute raw VyOS commands. In real mode it
   calls the public `olg-renderer-vyos/renderer` and `olg-renderer-vyos/apply`
   APIs.

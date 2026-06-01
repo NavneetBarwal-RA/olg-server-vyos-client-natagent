@@ -12,11 +12,12 @@ agent:
   configure:
     mode: placeholder # placeholder | real
 
-  renderer:
-    mode: placeholder
+  debug:
+    log_payloads: false
+    log_rendered: false
+    log_apply_plan: false
 
   apply:
-    mode: placeholder
     save_after_commit: false
 
   actions:

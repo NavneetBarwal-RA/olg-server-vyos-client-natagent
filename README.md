@@ -70,7 +70,7 @@ Important rule:
 - Explicit YAML values are preserved and validated (they are not overwritten by a second default pass).
 ```
 
-The agent must not hardcode NATS servers, subject patterns, KV bucket names, target name, renderer mode, apply mode, enabled actions, or state file paths in code. These values must come from YAML configuration.
+The agent must not hardcode NATS servers, subject patterns, KV bucket names, target name, configure backend mode, apply save behavior, enabled actions, or state file paths in code. These values must come from YAML configuration.
 
 Configure backend mode:
 
@@ -81,6 +81,28 @@ agent:
 ```
 
 `placeholder` is the default and uses the internal no-op renderer/apply path. `real` constructs adapters around `olg-renderer-vyos/renderer` and `olg-renderer-vyos/apply`; the NATS agent calls those public APIs and does not execute raw VyOS commands directly.
+
+`agent.configure.mode` is the single backend selector. There are no separate active renderer/apply mode fields.
+
+Real apply save behavior is controlled separately:
+
+```yaml
+agent:
+  apply:
+    save_after_commit: false
+```
+
+Full payload, rendered command, and apply-plan logging is disabled by default. It is intended only for lab debugging and requires both `agent.logging.level: debug` and explicit debug flags:
+
+```yaml
+agent:
+  logging:
+    level: debug
+  debug:
+    log_payloads: false
+    log_rendered: false
+    log_apply_plan: false
+```
 
 Core module dependencies are pinned to released tags:
 

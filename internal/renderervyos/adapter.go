@@ -18,13 +18,25 @@ type Backend interface {
 type Adapter struct {
 	backend Backend
 	logger  agentcore.Logger
+	debug   DebugLogging
 }
 
 type Option func(*Adapter)
 
+type DebugLogging struct {
+	LogPayloads bool
+	LogRendered bool
+}
+
 func WithLogger(logger agentcore.Logger) Option {
 	return func(a *Adapter) {
 		a.logger = logger
+	}
+}
+
+func WithDebugLogging(debug DebugLogging) Option {
+	return func(a *Adapter) {
+		a.debug = debug
 	}
 }
 
@@ -63,8 +75,17 @@ func (a *Adapter) Render(ctx context.Context, desired agentcore.StoredDesiredCon
 		"uuid", input.ConfigUUID,
 		"schema_name", input.SchemaName,
 		"schema_version", input.SchemaVersion,
-		"payload_json", string(input.PayloadJSON),
+		"payload_size_bytes", len(input.PayloadJSON),
 	)
+	if a.debug.LogPayloads {
+		a.logDebug("vyos renderer input payload prepared",
+			"target", input.Target,
+			"uuid", input.ConfigUUID,
+			"schema_name", input.SchemaName,
+			"schema_version", input.SchemaVersion,
+			"payload_json", string(input.PayloadJSON),
+		)
+	}
 
 	out, err := a.backend.Render(ctx, input)
 	if err != nil {
@@ -75,8 +96,18 @@ func (a *Adapter) Render(ctx context.Context, desired agentcore.StoredDesiredCon
 		"uuid", out.ConfigUUID,
 		"schema_name", out.SchemaName,
 		"schema_version", out.SchemaVersion,
-		"rendered_commands", out.RenderedText,
+		"rendered_size_bytes", len(out.RenderedText),
+		"rendered_command_count", countNonEmptyLines(out.RenderedText),
 	)
+	if a.debug.LogRendered {
+		a.logDebug("vyos renderer output commands produced",
+			"target", out.Target,
+			"uuid", out.ConfigUUID,
+			"schema_name", out.SchemaName,
+			"schema_version", out.SchemaVersion,
+			"rendered_commands", out.RenderedText,
+		)
+	}
 
 	return renderer.Output{
 		Target: out.Target,
@@ -179,4 +210,33 @@ func (a *Adapter) logInfo(msg string, kv ...any) {
 		return
 	}
 	a.logger.Info(msg, kv...)
+}
+
+func (a *Adapter) logDebug(msg string, kv ...any) {
+	if a == nil || a.logger == nil {
+		return
+	}
+	a.logger.Debug(msg, kv...)
+}
+
+func countNonEmptyLines(text string) int {
+	count := 0
+	inLine := false
+	for _, r := range text {
+		switch r {
+		case '\n', '\r':
+			if inLine {
+				count++
+				inLine = false
+			}
+		case ' ', '\t':
+			continue
+		default:
+			inLine = true
+		}
+	}
+	if inLine {
+		count++
+	}
+	return count
 }

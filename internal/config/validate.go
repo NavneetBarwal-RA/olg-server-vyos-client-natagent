@@ -29,12 +29,6 @@ func (c AppConfig) Validate() error {
 	default:
 		return fmt.Errorf("agent.configure.mode must be one of placeholder, real")
 	}
-	if c.Agent.Renderer.Mode != "placeholder" {
-		return fmt.Errorf("agent.renderer.mode must be placeholder")
-	}
-	if c.Agent.Apply.Mode != "placeholder" {
-		return fmt.Errorf("agent.apply.mode must be placeholder")
-	}
 	for _, action := range c.Agent.Actions.Enabled {
 		if action != "trace" {
 			return fmt.Errorf("agent.actions.enabled contains unsupported action %q", action)

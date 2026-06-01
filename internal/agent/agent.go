@@ -110,6 +110,7 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 		Renderer:    rendererEngine,
 		ApplyEngine: applyEngine,
 		Logger:      options.logger,
+		Debug:       configureDebugConfig(appCfg),
 		Now:         options.now,
 	})
 	if err != nil {
@@ -147,20 +148,45 @@ func newConfigureEngines(appCfg *config.AppConfig, logger agentcore.Logger) (con
 		return nil, nil, fmt.Errorf("app config is required")
 	}
 
+	debug := configureDebugConfig(appCfg)
 	switch appCfg.Agent.Configure.Mode {
 	case "placeholder":
 		return renderer.NewPlaceholder(), apply.NewPlaceholder(), nil
 	case "real":
-		rendererEngine, err := renderervyos.New(renderervyos.WithLogger(logger))
+		rendererEngine, err := renderervyos.New(
+			renderervyos.WithLogger(logger),
+			renderervyos.WithDebugLogging(renderervyos.DebugLogging{
+				LogPayloads: debug.LogPayloads,
+				LogRendered: debug.LogRendered,
+			}),
+		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create real configure renderer: %w", err)
 		}
-		applyEngine, err := applyvyos.New(appCfg.Agent.Apply.SaveAfterCommit, applyvyos.WithLogger(logger))
+		applyEngine, err := applyvyos.New(
+			appCfg.Agent.Apply.SaveAfterCommit,
+			applyvyos.WithLogger(logger),
+			applyvyos.WithDebugLogging(applyvyos.DebugLogging{
+				LogRendered:  debug.LogRendered,
+				LogApplyPlan: debug.LogApplyPlan,
+			}),
+		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create real configure apply engine: %w", err)
 		}
 		return rendererEngine, applyEngine, nil
 	default:
 		return nil, nil, fmt.Errorf("agent.configure.mode must be one of placeholder, real")
+	}
+}
+
+func configureDebugConfig(appCfg *config.AppConfig) configure.DebugLogging {
+	if appCfg == nil || appCfg.Agent.Logging.Level != "debug" {
+		return configure.DebugLogging{}
+	}
+	return configure.DebugLogging{
+		LogPayloads:  appCfg.Agent.Debug.LogPayloads,
+		LogRendered:  appCfg.Agent.Debug.LogRendered,
+		LogApplyPlan: appCfg.Agent.Debug.LogApplyPlan,
 	}
 }

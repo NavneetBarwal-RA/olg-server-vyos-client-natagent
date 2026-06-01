@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,6 +33,33 @@ func TestDefaultConfigureModeIsPlaceholder(t *testing.T) {
 /*
 TC-CONFIG-VALIDATE-002
 Type: Positive
+Title: Default debug flags are false
+Summary:
+Loads the default application config.
+Full payload, rendered command, and apply plan logging should be
+disabled unless explicitly enabled for lab debugging.
+
+Validates:
+  - log_payloads defaults to false
+  - log_rendered defaults to false
+  - log_apply_plan defaults to false
+*/
+func TestDefaultDebugFlagsAreFalse(t *testing.T) {
+	cfg := DefaultAppConfig()
+	if cfg.Agent.Debug.LogPayloads {
+		t.Fatal("default log_payloads got=true want=false")
+	}
+	if cfg.Agent.Debug.LogRendered {
+		t.Fatal("default log_rendered got=true want=false")
+	}
+	if cfg.Agent.Debug.LogApplyPlan {
+		t.Fatal("default log_apply_plan got=true want=false")
+	}
+}
+
+/*
+TC-CONFIG-VALIDATE-003
+Type: Positive
 Title: Supported configure modes validate
 Summary:
 Checks each supported configure backend mode.
@@ -54,7 +83,7 @@ func TestValidateConfigureModeAcceptsSupportedValues(t *testing.T) {
 }
 
 /*
-TC-CONFIG-VALIDATE-003
+TC-CONFIG-VALIDATE-004
 Type: Negative
 Title: Unknown configure mode is rejected
 Summary:
@@ -76,5 +105,69 @@ func TestValidateConfigureModeRejectsUnknownValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agent.configure.mode") {
 		t.Fatalf("error %q does not mention agent.configure.mode", err.Error())
+	}
+}
+
+/*
+TC-CONFIG-VALIDATE-005
+Type: Positive
+Title: Save after commit setting is preserved
+Summary:
+Sets the real apply save flag on the application config.
+Validation should not alter the value because this flag controls
+the renderer apply engine save behavior.
+
+Validates:
+  - save_after_commit true is accepted
+  - validation does not mutate save_after_commit
+*/
+func TestValidatePreservesApplySaveAfterCommit(t *testing.T) {
+	cfg := DefaultAppConfig()
+	cfg.Agent.Apply.SaveAfterCommit = true
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("config should validate: %v", err)
+	}
+	if !cfg.Agent.Apply.SaveAfterCommit {
+		t.Fatal("save_after_commit was not preserved")
+	}
+}
+
+/*
+TC-CONFIG-VALIDATE-006
+Type: Positive
+Title: YAML loads without legacy backend mode fields
+Summary:
+Loads a YAML config that omits agent.renderer.mode and agent.apply.mode.
+The loader should accept the config because agent.configure.mode is
+the only active backend selector.
+
+Validates:
+  - config loads without agent.renderer.mode
+  - config loads without agent.apply.mode
+  - apply save_after_commit value is preserved
+*/
+func TestLoadConfigWithoutLegacyBackendModeFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+agent:
+  configure:
+    mode: real
+  apply:
+    save_after_commit: true
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Agent.Configure.Mode != "real" {
+		t.Fatalf("configure mode got=%q want=real", cfg.Agent.Configure.Mode)
+	}
+	if !cfg.Agent.Apply.SaveAfterCommit {
+		t.Fatal("save_after_commit got=false want=true")
 	}
 }

@@ -20,11 +20,12 @@ func DefaultAppConfig() AppConfig {
 			Configure: ConfigureConfig{
 				Mode: "placeholder",
 			},
-			Renderer: RendererConfig{
-				Mode: "placeholder",
+			Debug: DebugConfig{
+				LogPayloads:  false,
+				LogRendered:  false,
+				LogApplyPlan: false,
 			},
 			Apply: ApplyConfig{
-				Mode:            "placeholder",
 				SaveAfterCommit: false,
 			},
 			Actions: ActionsConfig{
