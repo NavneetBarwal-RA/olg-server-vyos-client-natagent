@@ -2,8 +2,10 @@ package configure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -112,6 +114,15 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	}
 	if desired.Record.UUID != msg.UUID {
 		return s.fail(ctx, msg, "desired_uuid_mismatch", "desired uuid mismatch", fmt.Errorf("desired uuid %q does not match notification uuid %q", desired.Record.UUID, msg.UUID))
+	}
+	if strings.TrimSpace(desired.Record.Target) == "" {
+		return s.fail(ctx, msg, "desired_target_invalid", "desired target invalid", errors.New("desired target is empty"))
+	}
+	if strings.TrimSpace(desired.Record.UUID) == "" {
+		return s.fail(ctx, msg, "desired_uuid_invalid", "desired uuid invalid", errors.New("desired uuid is empty"))
+	}
+	if len(desired.Record.Payload) > 0 && !json.Valid(desired.Record.Payload) {
+		return s.fail(ctx, msg, "desired_payload_invalid", "desired payload invalid", errors.New("desired payload is invalid json"))
 	}
 	s.logInfo("configure desired loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_size_bytes", len(desired.Record.Payload))
 	if s.debug.LogPayloads {
