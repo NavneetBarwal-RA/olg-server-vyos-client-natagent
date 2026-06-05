@@ -10,6 +10,22 @@ import (
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/testutil"
 )
 
+/*
+TC-CONFIGURE-WORKFLOW-001
+Type: Positive
+Title: Configure success applies and saves state
+Summary:
+Runs the configure service with a valid desired config for a new UUID.
+The workflow should render once, apply once, save checkpoint state once,
+and publish successful configure output without publishing failure.
+
+Validates:
+  - renderer is called exactly once
+  - apply is called exactly once
+  - state is saved with target and UUID
+  - success status/result is published
+  - no failure result is published
+*/
 func TestConfigureWorkflowSuccessAppliesAndSavesState(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-success")
 
@@ -42,6 +58,20 @@ func TestConfigureWorkflowSuccessAppliesAndSavesState(t *testing.T) {
 	assertNoFailureResult(t, fixture.client)
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-002
+Type: Safety
+Title: Configure saves state after apply
+Summary:
+Records workflow events on the successful configure path.
+The local state checkpoint must be written only after rendered config
+has been applied.
+
+Validates:
+  - render happens before apply
+  - apply happens before state save
+  - state is not checkpointed before apply
+*/
 func TestConfigureWorkflowSavesStateAfterApply(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-order")
 
@@ -53,6 +83,20 @@ func TestConfigureWorkflowSavesStateAfterApply(t *testing.T) {
 	assertEventOrder(t, fixture.events, "apply", "state_save")
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-003
+Type: Safety
+Title: Configure publishes success after state save
+Summary:
+Records publish and state-save events on the successful configure path.
+Final success status and success result should be published only after
+the local UUID checkpoint has been saved.
+
+Validates:
+  - apply happens before state save
+  - success status is published after state save
+  - success result is published after state save
+*/
 func TestConfigureWorkflowPublishesSuccessAfterStateSave(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-publish")
 
@@ -61,9 +105,26 @@ func TestConfigureWorkflowPublishesSuccessAfterStateSave(t *testing.T) {
 	}
 
 	assertEventOrder(t, fixture.events, "apply", "state_save")
+	assertEventOrder(t, fixture.events, "state_save", "publish_success_status")
 	assertEventOrder(t, fixture.events, "state_save", "publish_success")
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-004
+Type: Positive
+Title: Already in sync skips side effects
+Summary:
+Seeds local state with the same UUID as the incoming desired config.
+The configure service should report already-in-sync success and skip
+render, apply, and state save.
+
+Validates:
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - already_in_sync success is published
+  - no failure result is published
+*/
 func TestConfigureWorkflowAlreadyInSyncSkipsApply(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-sync")
 	fixture.store.Current.AppliedUUID = fixture.msg.UUID
@@ -94,6 +155,22 @@ func TestConfigureWorkflowAlreadyInSyncSkipsApply(t *testing.T) {
 	assertNoFailureResult(t, fixture.client)
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-005
+Type: Positive
+Title: Repeated same UUID is idempotent
+Summary:
+Runs configure twice with the same desired UUID.
+The first call should apply and save state; the second call should
+detect the saved UUID and skip render/apply/save.
+
+Validates:
+  - first call renders, applies, and saves once
+  - second call does not render again
+  - second call does not apply again
+  - second call does not save state again
+  - second call publishes already-in-sync success
+*/
 func TestConfigureWorkflowRepeatedSameUUIDIsIdempotent(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-repeat")
 
@@ -138,6 +215,23 @@ func TestConfigureWorkflowRepeatedSameUUIDIsIdempotent(t *testing.T) {
 	assertNoFailureResult(t, fixture.client)
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-006
+Type: Negative
+Title: Invalid desired payload fails before side effects
+Summary:
+Loads a desired config with malformed JSON payload.
+The configure service should reject it before local state, renderer,
+apply, or state-save side effects run.
+
+Validates:
+  - desired config is loaded once
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_payload_invalid
+*/
 func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-invalid")
 	invalid := testutil.DesiredConfig(fixture.msg.Target, fixture.msg.UUID, testutil.InvalidPayload())
@@ -175,6 +269,155 @@ func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.
 	}
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-007
+Type: Negative
+Title: Missing desired config fails before side effects
+Summary:
+Configures the fake client to return nil desired config.
+The configure service should publish a safe failure and stop before
+state load, render, apply, or state save.
+
+Validates:
+  - desired config is loaded once
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_config_missing
+*/
+func TestConfigureWorkflowMissingDesiredConfigFailsBeforeSideEffects(t *testing.T) {
+	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-missing")
+	fixture.client.Desired = nil
+
+	err := fixture.service.Handle(context.Background(), fixture.msg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertNoConfigureSideEffectsAfterDesiredLoad(t, fixture)
+	result := assertFailureResult(t, fixture.client, "desired_config_missing")
+	assertResultCorrelation(t, result, fixture.msg.Target, fixture.msg.UUID, fixture.msg.RPCID)
+	assertNoSuccessResult(t, fixture.client)
+}
+
+/*
+TC-CONFIGURE-WORKFLOW-008
+Type: Safety
+Title: Wrong target fails before side effects
+Summary:
+Loads a desired config whose target differs from the configure
+notification target. The service should fail safely using notification
+correlation data and stop before side effects.
+
+Validates:
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_target_mismatch
+  - no success result is published
+*/
+func TestConfigureWorkflowWrongTargetFailsBeforeSideEffects(t *testing.T) {
+	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-wrong-target")
+	desired := testutil.DesiredConfig("other-target", fixture.msg.UUID, testutil.MinimalDesiredConfig().Record.Payload)
+	fixture.client.Desired = &desired
+
+	err := fixture.service.Handle(context.Background(), fixture.msg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertNoConfigureSideEffectsAfterDesiredLoad(t, fixture)
+	result := assertFailureResult(t, fixture.client, "desired_target_mismatch")
+	assertResultCorrelation(t, result, fixture.msg.Target, fixture.msg.UUID, fixture.msg.RPCID)
+	assertNoSuccessResult(t, fixture.client)
+}
+
+/*
+TC-CONFIGURE-WORKFLOW-009
+Type: Safety
+Title: Desired UUID mismatch fails before side effects
+Summary:
+Loads a desired config whose UUID differs from the configure
+notification UUID. The service should fail safely and stop before
+state load, render, apply, or state save.
+
+Validates:
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_uuid_mismatch
+  - no success result is published
+*/
+func TestConfigureWorkflowDesiredUUIDMismatchFailsBeforeSideEffects(t *testing.T) {
+	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-uuid-mismatch")
+	desired := testutil.DesiredConfig(fixture.msg.Target, "cfg-other", testutil.MinimalDesiredConfig().Record.Payload)
+	fixture.client.Desired = &desired
+
+	err := fixture.service.Handle(context.Background(), fixture.msg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertNoConfigureSideEffectsAfterDesiredLoad(t, fixture)
+	result := assertFailureResult(t, fixture.client, "desired_uuid_mismatch")
+	assertResultCorrelation(t, result, fixture.msg.Target, fixture.msg.UUID, fixture.msg.RPCID)
+	assertNoSuccessResult(t, fixture.client)
+}
+
+/*
+TC-CONFIGURE-WORKFLOW-010
+Type: Negative
+Title: Empty target fails before side effects
+Summary:
+Uses an empty notification and desired target.
+The configure service should reject the target before local state,
+renderer, apply, or state-save side effects run.
+
+Validates:
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_target_invalid
+  - no success result is published
+*/
+func TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects(t *testing.T) {
+	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-empty-target")
+	fixture.msg.Target = ""
+	desired := testutil.DesiredConfig("", fixture.msg.UUID, testutil.MinimalDesiredConfig().Record.Payload)
+	fixture.client.Desired = &desired
+
+	err := fixture.service.Handle(context.Background(), fixture.msg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertNoConfigureSideEffectsAfterDesiredLoad(t, fixture)
+	result := assertFailureResult(t, fixture.client, "desired_target_invalid")
+	assertResultCorrelation(t, result, "", fixture.msg.UUID, fixture.msg.RPCID)
+	assertNoSuccessResult(t, fixture.client)
+}
+
+/*
+TC-CONFIGURE-WORKFLOW-011
+Type: Negative
+Title: Empty UUID fails before side effects
+Summary:
+Uses an empty notification and desired config UUID.
+The configure service should reject the UUID before local state,
+renderer, apply, or state-save side effects run.
+
+Validates:
+  - state load is not called
+  - renderer is not called
+  - apply is not called
+  - state save is not called
+  - failure result uses desired_uuid_invalid
+  - failure result preserves correlation fields
+*/
 func TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-empty")
 	fixture.msg.UUID = ""
@@ -213,6 +456,67 @@ func TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects(t *testing.T) {
 	}
 }
 
+/*
+TC-CONFIGURE-WORKFLOW-012
+Type: Positive
+Title: New UUID triggers render apply and state update
+Summary:
+Seeds local state with an older applied UUID and handles a new desired
+UUID. The service should treat the config as new, render/apply it, and
+save the new UUID checkpoint.
+
+Validates:
+  - renderer is called exactly once
+  - apply is called exactly once
+  - state is saved exactly once
+  - saved state contains the new UUID
+  - success result is published
+  - no failure result is published
+*/
+func TestConfigureWorkflowNewUUIDTriggersRenderApplyAndStateUpdate(t *testing.T) {
+	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-new")
+	fixture.store.Current.AppliedUUID = "cfg-old"
+
+	if err := fixture.service.Handle(context.Background(), fixture.msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	if got := fixture.renderer.Calls(); got != 1 {
+		t.Fatalf("renderer calls got=%d want=1", got)
+	}
+	if got := fixture.apply.Calls(); got != 1 {
+		t.Fatalf("apply calls got=%d want=1", got)
+	}
+	if got := fixture.store.SaveCalls(); got != 1 {
+		t.Fatalf("save calls got=%d want=1", got)
+	}
+	saved, ok := fixture.store.LastSavedState()
+	if !ok {
+		t.Fatal("expected saved state")
+	}
+	if saved.AppliedUUID != fixture.msg.UUID {
+		t.Fatalf("saved uuid got=%q want=%q", saved.AppliedUUID, fixture.msg.UUID)
+	}
+	if !fixture.client.ContainsResult("success", "configure") {
+		t.Fatal("expected configure success result")
+	}
+	assertNoFailureResult(t, fixture.client)
+}
+
+/*
+TC-CONFIGURE-WORKFLOW-013
+Type: Positive
+Title: Configure success preserves correlation identifiers
+Summary:
+Runs a successful configure workflow and inspects result, renderer input,
+and apply input. Target, UUID, and RPC ID should be preserved across the
+workflow.
+
+Validates:
+  - success result preserves rpc_id, target, and uuid
+  - renderer input preserves target and uuid
+  - apply input preserves target and uuid
+*/
 func TestConfigureWorkflowSuccessPreservesCorrelationIdentifiers(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-correlation")
 
@@ -312,6 +616,57 @@ func assertNoFailureResult(t *testing.T, recorder *testutil.FakeConfigureClient)
 		if result.Result == "failure" {
 			t.Fatalf("unexpected failure result: %+v", result)
 		}
+	}
+}
+
+func assertNoSuccessResult(t *testing.T, recorder *testutil.FakeConfigureClient) {
+	t.Helper()
+
+	for _, result := range recorder.Results() {
+		if result.Result == "success" {
+			t.Fatalf("unexpected success result: %+v", result)
+		}
+	}
+}
+
+func assertFailureResult(t *testing.T, recorder *testutil.FakeConfigureClient, wantCode string) agentcore.ResultEnvelope {
+	t.Helper()
+
+	result, ok := recorder.LastResult()
+	if !ok {
+		t.Fatal("expected failure result")
+	}
+	if result.Result != "failure" || result.ErrorCode != wantCode {
+		t.Fatalf("failure result got=%+v want result=failure error_code=%s", result, wantCode)
+	}
+	return result
+}
+
+func assertResultCorrelation(t *testing.T, result agentcore.ResultEnvelope, target, uuid, rpcID string) {
+	t.Helper()
+
+	if result.Target != target || result.UUID != uuid || result.RPCID != rpcID {
+		t.Fatalf("result lost correlation data: %+v want target=%q uuid=%q rpc_id=%q", result, target, uuid, rpcID)
+	}
+}
+
+func assertNoConfigureSideEffectsAfterDesiredLoad(t *testing.T, fixture phase3WorkflowFixture) {
+	t.Helper()
+
+	if got := fixture.client.LoadCalls(); got != 1 {
+		t.Fatalf("desired load calls got=%d want=1", got)
+	}
+	if got := fixture.store.LoadCalls(); got != 0 {
+		t.Fatalf("state load calls got=%d want=0", got)
+	}
+	if got := fixture.renderer.Calls(); got != 0 {
+		t.Fatalf("renderer calls got=%d want=0", got)
+	}
+	if got := fixture.apply.Calls(); got != 0 {
+		t.Fatalf("apply calls got=%d want=0", got)
+	}
+	if got := fixture.store.SaveCalls(); got != 0 {
+		t.Fatalf("save calls got=%d want=0", got)
 	}
 }
 

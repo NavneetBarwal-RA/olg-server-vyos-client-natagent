@@ -182,9 +182,6 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	}
 
 	s.logInfo("configure applied", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "stage", "applied")
-	if err := s.publishStatus(ctx, msg, "success", "applied", "configure apply completed"); err != nil {
-		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status applied: %w", err))
-	}
 
 	nextState := state.State{
 		Target:      msg.Target,
@@ -195,6 +192,10 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 		return s.fail(ctx, msg, "state_save_failed", "failed to save local state", fmt.Errorf("save local state: %w", err))
 	}
 	s.logInfo("configure state saved", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID)
+
+	if err := s.publishStatus(ctx, msg, "success", "applied", "configure apply completed"); err != nil {
+		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status applied: %w", err))
+	}
 
 	s.logInfo("configure result publishing", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "status", "success")
 	if err := s.publishSuccessResult(ctx, msg, "configure apply completed"); err != nil {
