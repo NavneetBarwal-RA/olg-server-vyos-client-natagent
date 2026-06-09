@@ -2,6 +2,8 @@ package configure
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -218,24 +220,31 @@ func TestConfigureWorkflowRepeatedSameUUIDIsIdempotent(t *testing.T) {
 /*
 TC-CONFIGURE-WORKFLOW-006
 Type: Negative
-Title: Invalid desired payload fails before side effects
+Title: Invalid desired payload fails at renderer boundary
 Summary:
 Loads a desired config with malformed JSON payload.
-The configure service should reject it before local state, renderer,
-apply, or state-save side effects run.
+The configure service should pass the payload through to the renderer
+contract, which rejects invalid JSON after desired and local state are
+loaded but before apply or state-save side effects run.
 
 Validates:
   - desired config is loaded once
-  - state load is not called
-  - renderer is not called
+  - state load is called once
+  - renderer is called once
   - apply is not called
   - state save is not called
-  - failure result uses desired_payload_invalid
+  - failure result uses render_failed
 */
-func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.T) {
+func TestConfigureWorkflowInvalidDesiredConfigFailsAtRendererBoundary(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-invalid")
 	invalid := testutil.DesiredConfig(fixture.msg.Target, fixture.msg.UUID, testutil.InvalidPayload())
 	fixture.client.Desired = &invalid
+	fixture.renderer.Validate = func(desired agentcore.StoredDesiredConfig) error {
+		if !json.Valid(desired.Record.Payload) {
+			return errors.New("invalid desired payload json")
+		}
+		return nil
+	}
 
 	err := fixture.service.Handle(context.Background(), fixture.msg)
 	if err == nil {
@@ -245,11 +254,11 @@ func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.
 	if got := fixture.client.LoadCalls(); got != 1 {
 		t.Fatalf("desired load calls got=%d want=1", got)
 	}
-	if got := fixture.store.LoadCalls(); got != 0 {
-		t.Fatalf("state load calls got=%d want=0", got)
+	if got := fixture.store.LoadCalls(); got != 1 {
+		t.Fatalf("state load calls got=%d want=1", got)
 	}
-	if got := fixture.renderer.Calls(); got != 0 {
-		t.Fatalf("renderer calls got=%d want=0", got)
+	if got := fixture.renderer.Calls(); got != 1 {
+		t.Fatalf("renderer calls got=%d want=1", got)
 	}
 	if got := fixture.apply.Calls(); got != 0 {
 		t.Fatalf("apply calls got=%d want=0", got)
@@ -261,12 +270,13 @@ func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.
 	if !ok {
 		t.Fatal("expected failure result")
 	}
-	if result.Result != "failure" || result.ErrorCode != "desired_payload_invalid" {
-		t.Fatalf("failure result got=%+v want result=failure error_code=desired_payload_invalid", result)
+	if result.Result != "failure" || result.ErrorCode != "render_failed" {
+		t.Fatalf("failure result got=%+v want result=failure error_code=render_failed", result)
 	}
 	if result.Target != fixture.msg.Target || result.UUID != fixture.msg.UUID || result.RPCID != fixture.msg.RPCID {
 		t.Fatalf("failure result lost correlation data: %+v", result)
 	}
+	assertNoSuccessResult(t, fixture.client)
 }
 
 /*

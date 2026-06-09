@@ -28,4 +28,4 @@ Additional Phase 3 coverage:
 | Final success status after checkpoint | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowPublishesSuccessAfterStateSave` | Proves state save precedes final success status publication. |
 | Desired UUID mismatch | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowDesiredUUIDMismatchFailsBeforeSideEffects` | Preserves notification correlation data on failure. |
 | Empty target | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects` | Validates explicit empty-target guard. |
-| Invalid payload JSON | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects` | Invalid desired payload fails before state/render/apply/save side effects. |
+| Invalid payload JSON | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowInvalidDesiredConfigFailsAtRendererBoundary` | Invalid desired payload is rejected by the renderer after state load and before apply/save side effects. |

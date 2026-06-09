@@ -2,7 +2,6 @@ package configure
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -121,12 +120,9 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	if strings.TrimSpace(desired.Record.UUID) == "" {
 		return s.fail(ctx, msg, "desired_uuid_invalid", "desired uuid invalid", errors.New("desired uuid is empty"))
 	}
-	if len(desired.Record.Payload) > 0 && !json.Valid(desired.Record.Payload) {
-		return s.fail(ctx, msg, "desired_payload_invalid", "desired payload invalid", errors.New("desired payload is invalid json"))
-	}
 	s.logInfo("configure desired loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_size_bytes", len(desired.Record.Payload))
 	if s.debug.LogPayloads {
-		s.logDebug("configure desired payload loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_json", string(desired.Record.Payload))
+		s.logDebug("configure desired payload summary", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_size_bytes", len(desired.Record.Payload), "payload_body_omitted", true)
 	}
 
 	localState, err := s.stateStore.Load(ctx)

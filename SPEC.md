@@ -361,7 +361,7 @@ actions.enabled = trace
 
 `agent.configure.mode` is the single source of truth for configure backend selection. `agent.apply.save_after_commit` only controls whether the real apply backend saves committed VyOS configuration.
 
-Full desired payload, rendered command, and apply-plan logging is disabled by default. It is lab/debug-only and requires `agent.logging.level = debug` plus the relevant `agent.debug.*` flag.
+Desired payload debug logging emits metadata only, not raw payload bodies. Rendered command and apply-plan logging are disabled by default. Debug logging requires `agent.logging.level = debug` plus the relevant `agent.debug.*` flag.
 
 ## 14. Runtime config package
 
