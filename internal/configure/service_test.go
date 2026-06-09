@@ -2,6 +2,7 @@ package configure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/routerarchitects/nats-agent-core/agentcore"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderer"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/state"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/testutil"
 )
 
 type fakeConfigureClient struct {
@@ -815,5 +817,63 @@ func TestHandleSerializesConcurrentConfigureProcessing(t *testing.T) {
 	}
 	if store.saved[0].AppliedUUID != "cfg-15-a" || store.saved[1].AppliedUUID != "cfg-15-b" {
 		t.Fatalf("saved order mismatch got=%q then %q", store.saved[0].AppliedUUID, store.saved[1].AppliedUUID)
+	}
+}
+
+/*
+TC-CONFIGURE-SERVICE-016
+Type: Safety
+Title: Handle does not log raw desired payload
+Summary:
+Runs the configure service with payload debug logging enabled and a
+desired config that contains a secret value. The service should emit
+payload metadata only and must not write the raw payload body to logs.
+
+Validates:
+  - configure succeeds with payload debug logging enabled
+  - logs include payload metadata
+  - logs do not include payload_json
+  - logs do not include secret payload content
+*/
+func TestHandleDoesNotLogRawDesiredPayload(t *testing.T) {
+	msg := agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-log-1", Target: "vyos", UUID: "cfg-log-1"}
+	desired := &agentcore.StoredDesiredConfig{
+		Record: agentcore.DesiredConfigRecord{
+			Target:  msg.Target,
+			UUID:    msg.UUID,
+			Payload: json.RawMessage(`{"password":"swordfish","interfaces":[]}`),
+		},
+	}
+
+	logs := &testutil.LogCapture{}
+	client := &fakeConfigureClient{desired: desired}
+	store := &fakeStateStore{}
+	rndr := &fakeRenderer{output: renderer.Output{Target: msg.Target, UUID: msg.UUID, Text: "set system host-name test\n"}}
+	apply := &fakeApplyEngine{}
+
+	svc, err := NewService(Dependencies{
+		Client:      client,
+		StateStore:  store,
+		Renderer:    rndr,
+		ApplyEngine: apply,
+		Logger:      logs,
+		Debug:       DebugLogging{LogPayloads: true},
+		Now:         time.Now,
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := svc.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if !logs.Contains("payload_size_bytes") {
+		t.Fatal("expected payload metadata in logs")
+	}
+	if logs.Contains("payload_json") {
+		t.Fatal("raw payload key leaked to logs")
+	}
+	if logs.Contains("swordfish") {
+		t.Fatal("secret payload content leaked to logs")
 	}
 }

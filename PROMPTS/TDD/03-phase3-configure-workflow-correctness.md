@@ -298,7 +298,7 @@ func TestConfigureWorkflowSuccessAppliesAndSavesState(t *testing.T)
 func TestConfigureWorkflowSavesStateAfterApply(t *testing.T)
 func TestConfigureWorkflowAlreadyInSyncSkipsApply(t *testing.T)
 func TestConfigureWorkflowRepeatedSameUUIDIsIdempotent(t *testing.T)
-func TestConfigureWorkflowInvalidDesiredConfigFailsBeforeSideEffects(t *testing.T)
+func TestConfigureWorkflowInvalidDesiredConfigFailsAtRendererBoundary(t *testing.T)
 ```
 
 Use table-driven tests only if they improve readability.
