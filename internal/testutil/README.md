@@ -40,7 +40,7 @@ Use `LogCapture` as an `agentcore.Logger` when later tests need to check that pa
 
 Use `EventRecorder` or `OrderRecorder` to record high-level workflow events such as `render`, `apply`, `state_save`, `publish_success`, and `publish_failure`.
 
-Use fixtures for minimal target, UUID, desired config, rendered output, invalid payloads, and large payloads. Keep test-specific payload details in the tests that need them.
+Use fixtures for minimal target, UUID, placeholder-only desired config, minimally renderable desired config, rendered output, invalid payloads, and large payloads. Keep test-specific payload details in the tests that need them.
 
 ## Scope
 

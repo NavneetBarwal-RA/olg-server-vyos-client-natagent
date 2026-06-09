@@ -40,10 +40,10 @@ func (f *FakeStateStore) Save(ctx context.Context, st state.State) error {
 	defer f.mu.Unlock()
 
 	f.saveCalls++
-	f.savedStates = append(f.savedStates, st)
 	if f.SaveErr != nil {
 		return f.SaveErr
 	}
+	f.savedStates = append(f.savedStates, st)
 	f.Current = st
 	return nil
 }

@@ -15,7 +15,38 @@ const (
 )
 
 func MinimalDesiredConfig() agentcore.StoredDesiredConfig {
+	return MinimalRenderableDesiredConfig()
+}
+
+func MinimalPlaceholderDesiredConfig() agentcore.StoredDesiredConfig {
 	return DesiredConfig(MinimalTarget, MinimalUUID, json.RawMessage(`{"interfaces":[],"services":{}}`))
+}
+
+func MinimalRenderableDesiredConfig() agentcore.StoredDesiredConfig {
+	return DesiredConfig(MinimalTarget, MinimalUUID, json.RawMessage(`{
+		"interfaces": [
+			{
+				"ethernet": [{"select-ports": ["WAN*"]}],
+				"ipv4": {"addressing": "dynamic"},
+				"name": "WAN",
+				"role": "upstream",
+				"services": ["ssh"]
+			},
+			{
+				"ethernet": [{"select-ports": ["LAN*"]}],
+				"ipv4": {
+					"addressing": "static",
+					"subnet": "192.168.60.1/24"
+				},
+				"name": "LAN",
+				"role": "downstream",
+				"services": ["ssh"]
+			}
+		],
+		"services": {
+			"ssh": {"port": 22}
+		}
+	}`))
 }
 
 func DesiredConfig(target, uuid string, payload json.RawMessage) agentcore.StoredDesiredConfig {
