@@ -382,22 +382,24 @@ TC-CONFIGURE-WORKFLOW-010
 Type: Negative
 Title: Empty target fails before side effects
 Summary:
-Uses an empty notification and desired target.
+Uses an empty notification target while the fake client still has a
+non-empty desired target available.
 The configure service should reject the target before local state,
-renderer, apply, or state-save side effects run.
+desired lookup, renderer, apply, or state-save side effects run.
 
 Validates:
+  - desired config is not loaded
   - state load is not called
   - renderer is not called
   - apply is not called
   - state save is not called
-  - failure result uses desired_target_invalid
+  - failure result uses notification_target_invalid
   - no success result is published
 */
 func TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-empty-target")
 	fixture.msg.Target = ""
-	desired := testutil.DesiredConfig("", fixture.msg.UUID, testutil.MinimalDesiredConfig().Record.Payload)
+	desired := testutil.DesiredConfig("vyos", fixture.msg.UUID, testutil.MinimalDesiredConfig().Record.Payload)
 	fixture.client.Desired = &desired
 
 	err := fixture.service.Handle(context.Background(), fixture.msg)
@@ -405,8 +407,22 @@ func TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	assertNoConfigureSideEffectsAfterDesiredLoad(t, fixture)
-	result := assertFailureResult(t, fixture.client, "desired_target_invalid")
+	if got := fixture.client.LoadCalls(); got != 0 {
+		t.Fatalf("desired load calls got=%d want=0", got)
+	}
+	if got := fixture.store.LoadCalls(); got != 0 {
+		t.Fatalf("state load calls got=%d want=0", got)
+	}
+	if got := fixture.renderer.Calls(); got != 0 {
+		t.Fatalf("renderer calls got=%d want=0", got)
+	}
+	if got := fixture.apply.Calls(); got != 0 {
+		t.Fatalf("apply calls got=%d want=0", got)
+	}
+	if got := fixture.store.SaveCalls(); got != 0 {
+		t.Fatalf("save calls got=%d want=0", got)
+	}
+	result := assertFailureResult(t, fixture.client, "notification_target_invalid")
 	assertResultCorrelation(t, result, "", fixture.msg.UUID, fixture.msg.RPCID)
 	assertNoSuccessResult(t, fixture.client)
 }
@@ -416,22 +432,24 @@ TC-CONFIGURE-WORKFLOW-011
 Type: Negative
 Title: Empty UUID fails before side effects
 Summary:
-Uses an empty notification and desired config UUID.
+Uses an empty notification UUID while the fake client still has a
+non-empty desired UUID available.
 The configure service should reject the UUID before local state,
-renderer, apply, or state-save side effects run.
+desired lookup, renderer, apply, or state-save side effects run.
 
 Validates:
+  - desired config is not loaded
   - state load is not called
   - renderer is not called
   - apply is not called
   - state save is not called
-  - failure result uses desired_uuid_invalid
+  - failure result uses notification_uuid_invalid
   - failure result preserves correlation fields
 */
 func TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects(t *testing.T) {
 	fixture := newPhase3WorkflowFixture(t, "cfg-phase3-empty")
 	fixture.msg.UUID = ""
-	invalid := testutil.DesiredConfig(fixture.msg.Target, "", testutil.MinimalDesiredConfig().Record.Payload)
+	invalid := testutil.DesiredConfig(fixture.msg.Target, "cfg-non-empty", testutil.MinimalDesiredConfig().Record.Payload)
 	fixture.client.Desired = &invalid
 
 	err := fixture.service.Handle(context.Background(), fixture.msg)
@@ -439,8 +457,8 @@ func TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if got := fixture.client.LoadCalls(); got != 1 {
-		t.Fatalf("desired load calls got=%d want=1", got)
+	if got := fixture.client.LoadCalls(); got != 0 {
+		t.Fatalf("desired load calls got=%d want=0", got)
 	}
 	if got := fixture.store.LoadCalls(); got != 0 {
 		t.Fatalf("state load calls got=%d want=0", got)
@@ -458,8 +476,8 @@ func TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects(t *testing.T) {
 	if !ok {
 		t.Fatal("expected failure result")
 	}
-	if result.Result != "failure" || result.ErrorCode != "desired_uuid_invalid" {
-		t.Fatalf("failure result got=%+v want result=failure error_code=desired_uuid_invalid", result)
+	if result.Result != "failure" || result.ErrorCode != "notification_uuid_invalid" {
+		t.Fatalf("failure result got=%+v want result=failure error_code=notification_uuid_invalid", result)
 	}
 	if result.Target != fixture.msg.Target || result.UUID != "" || result.RPCID != fixture.msg.RPCID {
 		t.Fatalf("failure result lost correlation data: %+v", result)

@@ -92,6 +92,13 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if strings.TrimSpace(msg.Target) == "" {
+		return s.fail(ctx, msg, "notification_target_invalid", "configure notification target invalid", errors.New("configure notification target is empty"))
+	}
+	if strings.TrimSpace(msg.UUID) == "" {
+		return s.fail(ctx, msg, "notification_uuid_invalid", "configure notification uuid invalid", errors.New("configure notification uuid is empty"))
+	}
+
 	if err := s.publishStatus(ctx, msg, "running", "received", "configure notification received"); err != nil {
 		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status received: %w", err))
 	}
@@ -108,17 +115,17 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 	if desired == nil {
 		return s.fail(ctx, msg, "desired_config_missing", "desired config missing", errors.New("desired config is nil"))
 	}
-	if desired.Record.Target != msg.Target {
-		return s.fail(ctx, msg, "desired_target_mismatch", "desired target mismatch", fmt.Errorf("desired target %q does not match notification target %q", desired.Record.Target, msg.Target))
-	}
-	if desired.Record.UUID != msg.UUID {
-		return s.fail(ctx, msg, "desired_uuid_mismatch", "desired uuid mismatch", fmt.Errorf("desired uuid %q does not match notification uuid %q", desired.Record.UUID, msg.UUID))
-	}
 	if strings.TrimSpace(desired.Record.Target) == "" {
 		return s.fail(ctx, msg, "desired_target_invalid", "desired target invalid", errors.New("desired target is empty"))
 	}
 	if strings.TrimSpace(desired.Record.UUID) == "" {
 		return s.fail(ctx, msg, "desired_uuid_invalid", "desired uuid invalid", errors.New("desired uuid is empty"))
+	}
+	if desired.Record.Target != msg.Target {
+		return s.fail(ctx, msg, "desired_target_mismatch", "desired target mismatch", fmt.Errorf("desired target %q does not match notification target %q", desired.Record.Target, msg.Target))
+	}
+	if desired.Record.UUID != msg.UUID {
+		return s.fail(ctx, msg, "desired_uuid_mismatch", "desired uuid mismatch", fmt.Errorf("desired uuid %q does not match notification uuid %q", desired.Record.UUID, msg.UUID))
 	}
 	s.logInfo("configure desired loaded", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "payload_size_bytes", len(desired.Record.Payload))
 	if s.debug.LogPayloads {

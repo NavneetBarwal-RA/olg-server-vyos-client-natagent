@@ -461,6 +461,65 @@ func TestHandleDesiredUUIDMismatch(t *testing.T) {
 /*
 TC-CONFIGURE-SERVICE-008
 Type: Negative
+Title: Handle rejects malformed notification before desired lookup
+Summary:
+Uses malformed configure notifications while the fake client still has a
+valid desired record available. Notification envelope validation should
+run before desired lookup so bad notifications are not misclassified as
+desired-record mismatches.
+
+Validates:
+  - empty notification target skips desired lookup
+  - empty notification UUID skips desired lookup
+  - render apply and save are not called
+  - failure classification is notification validation
+*/
+func TestHandleRejectsMalformedNotificationBeforeDesiredLookup(t *testing.T) {
+	cases := []struct {
+		name     string
+		msg      agentcore.ConfigureNotification
+		wantCode string
+	}{
+		{
+			name:     "empty target",
+			msg:      agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-6a", Target: "", UUID: "cfg-6a"},
+			wantCode: "notification_target_invalid",
+		},
+		{
+			name:     "empty uuid",
+			msg:      agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-6b", Target: "vyos", UUID: ""},
+			wantCode: "notification_uuid_invalid",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeConfigureClient{desired: newDesired("vyos", "cfg-present")}
+			store := &fakeStateStore{}
+			rndr := &fakeRenderer{}
+			apply := &fakeApplyEngine{}
+			svc := newConfigureServiceForTest(t, client, store, rndr, apply, time.Now)
+
+			err := svc.Handle(context.Background(), tc.msg)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if client.loadCalls != 0 {
+				t.Fatalf("desired load calls got=%d want=0", client.loadCalls)
+			}
+			if len(client.results) != 1 || client.results[0].ErrorCode != tc.wantCode {
+				t.Fatalf("unexpected failure result %+v", client.results)
+			}
+			if rndr.calls != 0 || apply.calls != 0 || store.saveCalls != 0 {
+				t.Fatalf("calls renderer=%d apply=%d save=%d want 0/0/0", rndr.calls, apply.calls, store.saveCalls)
+			}
+		})
+	}
+}
+
+/*
+TC-CONFIGURE-SERVICE-009
+Type: Negative
 Title: Handle fails when local state load fails
 Summary:
 For state-load errors, service should publish failed status/result and return.
@@ -494,7 +553,7 @@ func TestHandleStateLoadFailure(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-009
+TC-CONFIGURE-SERVICE-010
 Type: Negative
 Title: Handle fails when render step fails
 Summary:
@@ -529,7 +588,7 @@ func TestHandleRenderFailure(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-010
+TC-CONFIGURE-SERVICE-011
 Type: Negative
 Title: Handle fails when apply step fails
 Summary:
@@ -567,7 +626,7 @@ func TestHandleApplyFailure(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-011
+TC-CONFIGURE-SERVICE-012
 Type: Negative
 Title: Handle fails when state save fails after apply success
 Summary:
@@ -602,7 +661,7 @@ func TestHandleStateSaveFailureAfterApplySuccess(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-012
+TC-CONFIGURE-SERVICE-013
 Type: Negative
 Title: Handle publishes failure when status publish fails
 Summary:
@@ -640,7 +699,7 @@ func TestHandleStatusPublishFailureBehavior(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-013
+TC-CONFIGURE-SERVICE-014
 Type: Safety
 Title: Handle returns reporting error when success result publish fails after save
 Summary:
@@ -688,7 +747,7 @@ func TestHandleResultPublishFailureBehavior(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-014
+TC-CONFIGURE-SERVICE-015
 Type: Safety
 Title: Handle returns reporting error when success status publish fails after save
 Summary:
@@ -738,7 +797,7 @@ func TestHandleSuccessStatusPublishFailureAfterSave(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-015
+TC-CONFIGURE-SERVICE-016
 Type: Negative
 Title: Handle rejects nil context input
 Summary:
@@ -771,7 +830,7 @@ func TestHandleRejectsNilContext(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-016
+TC-CONFIGURE-SERVICE-017
 Type: Positive
 Title: Handle serializes concurrent configure processing
 Summary:
@@ -878,7 +937,7 @@ func TestHandleSerializesConcurrentConfigureProcessing(t *testing.T) {
 }
 
 /*
-TC-CONFIGURE-SERVICE-017
+TC-CONFIGURE-SERVICE-018
 Type: Safety
 Title: Handle does not log raw desired payload
 Summary:

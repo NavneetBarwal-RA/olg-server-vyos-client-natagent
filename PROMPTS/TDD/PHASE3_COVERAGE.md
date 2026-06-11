@@ -14,7 +14,7 @@ This table maps the configure workflow cases from `TDD_SPEC.md` section 11 to th
 | CWF-008 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowNewUUIDTriggersRenderApplyAndStateUpdate` | Existing state has old UUID; new UUID renders, applies, and checkpoints new UUID. |
 | CWF-009 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowMissingDesiredConfigFailsBeforeSideEffects` | Nil desired config fails before state load, render, apply, or save. |
 | CWF-010 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowWrongTargetFailsBeforeSideEffects` | Desired target mismatch fails safely before side effects. |
-| CWF-011 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects` | Empty UUID fails safely before state load, render, apply, or save. |
+| CWF-011 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowEmptyUUIDFailsBeforeSideEffects` | Empty notification UUID fails before desired lookup, state load, render, apply, or save. |
 | CWF-012 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowSuccessPreservesCorrelationIdentifiers` | Success result preserves RPC ID, target, and UUID. |
 | CWF-013 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowSuccessAppliesAndSavesState` | Asserts success path publishes no failure result. |
 | CWF-014 | Covered | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowSavesStateAfterApply` | State save is ordered after apply, preventing pre-apply checkpointing. |
@@ -27,5 +27,6 @@ Additional Phase 3 coverage:
 | Success result after checkpoint | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowPublishesSuccessAfterStateSave` | Proves state save precedes success result publication. |
 | Final success status after checkpoint | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowPublishesSuccessAfterStateSave` | Proves state save precedes final success status publication. |
 | Desired UUID mismatch | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowDesiredUUIDMismatchFailsBeforeSideEffects` | Preserves notification correlation data on failure. |
-| Empty target | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects` | Validates explicit empty-target guard. |
+| Empty target | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowEmptyTargetFailsBeforeSideEffects` | Validates notification-target guard before desired lookup. |
+| Post-checkpoint reporting failure | `internal/configure/service_test.go` | `TestHandleResultPublishFailureBehavior`, `TestHandleSuccessStatusPublishFailureAfterSave` | Apply + state save remain authoritative; no contradictory configure failure is published afterward. |
 | Invalid payload JSON | `internal/configure/configure_workflow_test.go` | `TestConfigureWorkflowInvalidDesiredConfigFailsAtRendererBoundary` | Invalid desired payload is rejected by the renderer after state load and before apply/save side effects. |

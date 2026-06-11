@@ -424,19 +424,21 @@ When the agent receives a configure notification:
 
 ```text
 1. Receive ConfigureNotification.
-2. Publish running status.
-3. Load desired config with LoadDesiredConfig(ctx, target).
-4. Compare desired UUID with local applied UUID.
-5. If already applied:
+2. Validate notification target and UUID.
+3. Publish running status.
+4. Load desired config with LoadDesiredConfig(ctx, target).
+5. Validate desired record target and UUID.
+6. Compare desired UUID with local applied UUID.
+7. If already applied:
    - publish success result
    - do not render
    - do not apply
-6. If not applied:
+8. If not applied:
    - pass desired payload to Renderer.Render(...)
    - pass rendered config to ApplyEngine.Apply(...)
    - update local applied UUID after render and apply both succeed
    - publish success result
-7. If any step fails:
+9. If any step fails:
    - before local state save: do not update local applied UUID and publish failure result
    - after local state save: keep local applied UUID and treat outbound reporting failure separately from configure failure
 ```
@@ -586,7 +588,15 @@ errors, warnings, or later observability hooks).
 
 ## 22. Result publishing
 
-Every accepted configure/action request must publish a final result.
+Every accepted configure/action request should publish a final result under
+normal conditions.
+
+Configure exception:
+- if final success status or final success result publication fails after
+  apply and local state checkpoint both succeed, the agent must not publish a
+  contradictory configure failure result for that UUID
+- this is treated as reporting failure, not configure failure
+- durable reporting retry is future hardening work
 
 Configure success:
 
