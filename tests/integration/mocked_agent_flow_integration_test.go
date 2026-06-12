@@ -439,8 +439,10 @@ Validates:
   - error is returned before test timeout
 */
 func TestIntegrationAgentCoreConnectionFailureHandled(t *testing.T) {
-	port := freeTCPPort(t)
-	cfg := mockedIntegrationCoreConfig(t, "nats://127.0.0.1:"+strconv.Itoa(port))
+	listener, url := reserveUnavailableNATSURL(t)
+	defer listener.Close()
+
+	cfg := mockedIntegrationCoreConfig(t, url)
 	cfg.NATS.ConnectTimeout = 100 * time.Millisecond
 	cfg.NATS.RetryOnFailedConnect = false
 	cfg.NATS.MaxReconnects = 0
@@ -857,57 +859,77 @@ func startTestNATSServer(t *testing.T) string {
 
 	bin, err := exec.LookPath("nats-server")
 	if err != nil {
-		t.Skip("nats-server binary is required for integration tests")
+		t.Fatalf("nats-server binary is required for integration tests: %v", err)
 	}
 
-	port := freeTCPPort(t)
 	dataDir := t.TempDir()
-	url := "nats://127.0.0.1:" + strconv.Itoa(port)
+	for attempt := 0; attempt < 20; attempt++ {
+		port := chooseTCPPort(t)
+		url := "nats://127.0.0.1:" + strconv.Itoa(port)
 
-	var logs bytes.Buffer
-	cmd := exec.Command(bin, "-js", "-a", "127.0.0.1", "-p", strconv.Itoa(port), "-sd", dataDir)
-	cmd.Stdout = &logs
-	cmd.Stderr = &logs
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start nats-server: %v", err)
-	}
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(os.Interrupt)
-			done := make(chan error, 1)
-			go func() { done <- cmd.Wait() }()
+		var logs bytes.Buffer
+		cmd := exec.Command(bin, "-js", "-a", "127.0.0.1", "-p", strconv.Itoa(port), "-sd", dataDir)
+		cmd.Stdout = &logs
+		cmd.Stderr = &logs
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start nats-server: %v", err)
+		}
+
+		var (
+			waitErr error
+			waitMu  sync.Mutex
+			exited  = make(chan struct{})
+		)
+		go func() {
+			err := cmd.Wait()
+			waitMu.Lock()
+			waitErr = err
+			waitMu.Unlock()
+			close(exited)
+		}()
+
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
 			select {
-			case <-done:
-			case <-time.After(2 * time.Second):
-				_ = cmd.Process.Kill()
-				<-done
+			case <-exited:
+				waitMu.Lock()
+				err := waitErr
+				waitMu.Unlock()
+				if strings.Contains(logs.String(), "address already in use") {
+					goto retry
+				}
+				t.Fatalf("nats-server exited before becoming ready: %v\nlogs:\n%s", err, logs.String())
+			default:
 			}
-		}
-	})
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		nc, err := nats.Connect(url, nats.Name("mocked-integration-ready-check"), nats.NoReconnect(), nats.Timeout(200*time.Millisecond))
-		if err == nil {
-			nc.Close()
-			return url
+			nc, err := nats.Connect(url, nats.Name("mocked-integration-ready-check"), nats.NoReconnect(), nats.Timeout(200*time.Millisecond))
+			if err == nil {
+				nc.Close()
+				t.Cleanup(func() {
+					if cmd.Process != nil {
+						_ = cmd.Process.Signal(os.Interrupt)
+						select {
+						case <-exited:
+						case <-time.After(2 * time.Second):
+							_ = cmd.Process.Kill()
+							<-exited
+						}
+					}
+				})
+				return url
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(50 * time.Millisecond)
+
+		_ = cmd.Process.Kill()
+		<-exited
+		t.Fatalf("nats-server did not become ready at %s\nlogs:\n%s", url, logs.String())
+
+	retry:
 	}
-	t.Fatalf("nats-server did not become ready at %s\nlogs:\n%s", url, logs.String())
+
+	t.Fatal("nats-server could not start after repeated bind retries")
 	return ""
-}
-
-func freeTCPPort(t *testing.T) int {
-	t.Helper()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for free port: %v", err)
-	}
-	defer listener.Close()
-
-	return listener.Addr().(*net.TCPAddr).Port
 }
 
 func newStartedClient(t *testing.T, cfg agentcore.Config, name string) *agentcore.Client {
@@ -998,6 +1020,31 @@ func mockedIntegrationCoreConfig(t *testing.T, url string) agentcore.Config {
 func mockedIntegrationTarget(t *testing.T) string {
 	t.Helper()
 	return "vyos_" + nextMockedIntegrationID()
+}
+
+func reserveUnavailableNATSURL(t *testing.T) (net.Listener, string) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for reserved unavailable nats url: %v", err)
+	}
+
+	return listener, "nats://" + listener.Addr().String()
+}
+
+func chooseTCPPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for candidate nats port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close candidate nats listener: %v", err)
+	}
+	return port
 }
 
 func nextMockedIntegrationID() string {
