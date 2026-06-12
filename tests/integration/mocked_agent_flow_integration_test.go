@@ -35,6 +35,7 @@ import (
 )
 
 const mockedIntegrationWireVersion = "1.0"
+const mockedIntegrationAsyncTimeout = 6 * time.Second
 
 var mockedIntegrationSequence atomic.Int64
 
@@ -549,7 +550,7 @@ func (p *integrationProbe) waitStatuses(t *testing.T, rpcID, terminalStage strin
 	t.Helper()
 
 	var seen []agentcore.StatusEnvelope
-	deadline := time.After(6 * time.Second)
+	deadline := time.After(mockedIntegrationAsyncTimeout)
 	for {
 		select {
 		case status := <-p.statuses:
@@ -570,7 +571,7 @@ func (p *integrationProbe) waitResult(t *testing.T, rpcID, result string) agentc
 	t.Helper()
 
 	var seen []agentcore.ResultEnvelope
-	deadline := time.After(6 * time.Second)
+	deadline := time.After(mockedIntegrationAsyncTimeout)
 	for {
 		select {
 		case got := <-p.results:
@@ -590,7 +591,7 @@ func (p *integrationProbe) waitResult(t *testing.T, rpcID, result string) agentc
 func (p *integrationProbe) assertNoResult(t *testing.T, rpcID, result string) {
 	t.Helper()
 
-	timer := time.NewTimer(300 * time.Millisecond)
+	timer := time.NewTimer(mockedIntegrationAsyncTimeout)
 	defer timer.Stop()
 	for {
 		select {
@@ -770,7 +771,7 @@ func subscribeRawStatusAndResult(t *testing.T, url string, cfg agentcore.Config,
 func (o *rawObserver) waitStatus(t *testing.T, stage string) rawStatus {
 	t.Helper()
 
-	deadline := time.After(6 * time.Second)
+	deadline := time.After(mockedIntegrationAsyncTimeout)
 	for {
 		select {
 		case msg := <-o.statuses:
@@ -786,7 +787,7 @@ func (o *rawObserver) waitStatus(t *testing.T, stage string) rawStatus {
 func (o *rawObserver) waitResult(t *testing.T, result string) rawResult {
 	t.Helper()
 
-	deadline := time.After(6 * time.Second)
+	deadline := time.After(mockedIntegrationAsyncTimeout)
 	for {
 		select {
 		case msg := <-o.results:
