@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/build"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -857,18 +860,17 @@ func (e *integrationActionExecutor) Calls() int {
 func startTestNATSServer(t *testing.T) string {
 	t.Helper()
 
-	bin, err := exec.LookPath("nats-server")
+	bin, err := resolveNATSServerBinary()
 	if err != nil {
 		t.Fatalf("nats-server binary is required for integration tests: %v", err)
 	}
 
 	dataDir := t.TempDir()
-	for attempt := 0; attempt < 20; attempt++ {
-		port := chooseTCPPort(t)
-		url := "nats://127.0.0.1:" + strconv.Itoa(port)
-
+	clientPortPattern := regexp.MustCompile(`Listening for client connections on .*:(\d+)`)
+	attemptLogs := make([]string, 0, 2)
+	for _, portArg := range []string{"0", "-1"} {
 		var logs bytes.Buffer
-		cmd := exec.Command(bin, "-js", "-a", "127.0.0.1", "-p", strconv.Itoa(port), "-sd", dataDir)
+		cmd := exec.Command(bin, "-js", "-a", "127.0.0.1", "-p", portArg, "-sd", dataDir)
 		cmd.Stdout = &logs
 		cmd.Stderr = &logs
 		if err := cmd.Start(); err != nil {
@@ -888,6 +890,19 @@ func startTestNATSServer(t *testing.T) string {
 			close(exited)
 		}()
 
+		stop := func() {
+			if cmd.Process == nil {
+				return
+			}
+			_ = cmd.Process.Signal(os.Interrupt)
+			select {
+			case <-exited:
+			case <-time.After(2 * time.Second):
+				_ = cmd.Process.Kill()
+				<-exited
+			}
+		}
+
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			select {
@@ -895,40 +910,40 @@ func startTestNATSServer(t *testing.T) string {
 				waitMu.Lock()
 				err := waitErr
 				waitMu.Unlock()
-				if strings.Contains(logs.String(), "address already in use") {
-					goto retry
-				}
-				t.Fatalf("nats-server exited before becoming ready: %v\nlogs:\n%s", err, logs.String())
+				attemptLogs = append(attemptLogs, fmt.Sprintf("-p %s exited before ready: %v%s\nlogs:\n%s", portArg, err, natsPortSelectionHint(portArg, logs.String()), logs.String()))
+				goto nextCandidate
 			default:
 			}
 
+			matches := clientPortPattern.FindStringSubmatch(logs.String())
+			if len(matches) != 2 {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			if portArg == "0" && matches[1] == "4222" {
+				attemptLogs = append(attemptLogs, fmt.Sprintf("-p %s did not produce an OS-assigned port%s\nlogs:\n%s", portArg, natsPortSelectionHint(portArg, logs.String()), logs.String()))
+				stop()
+				goto nextCandidate
+			}
+
+			url := "nats://127.0.0.1:" + matches[1]
 			nc, err := nats.Connect(url, nats.Name("mocked-integration-ready-check"), nats.NoReconnect(), nats.Timeout(200*time.Millisecond))
 			if err == nil {
 				nc.Close()
-				t.Cleanup(func() {
-					if cmd.Process != nil {
-						_ = cmd.Process.Signal(os.Interrupt)
-						select {
-						case <-exited:
-						case <-time.After(2 * time.Second):
-							_ = cmd.Process.Kill()
-							<-exited
-						}
-					}
-				})
+				t.Cleanup(stop)
 				return url
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 
-		_ = cmd.Process.Kill()
-		<-exited
-		t.Fatalf("nats-server did not become ready at %s\nlogs:\n%s", url, logs.String())
+		attemptLogs = append(attemptLogs, fmt.Sprintf("-p %s did not become ready%s\nlogs:\n%s", portArg, natsPortSelectionHint(portArg, logs.String()), logs.String()))
+		stop()
 
-	retry:
+	nextCandidate:
 	}
 
-	t.Fatal("nats-server could not start after repeated bind retries")
+	t.Fatalf("nats-server did not become ready with an OS-assigned client port after trying -p 0 and -p -1\n%s", strings.Join(attemptLogs, "\n\n"))
 	return ""
 }
 
@@ -1033,18 +1048,20 @@ func reserveUnavailableNATSURL(t *testing.T) (net.Listener, string) {
 	return listener, "nats://" + listener.Addr().String()
 }
 
-func chooseTCPPort(t *testing.T) int {
-	t.Helper()
+func resolveNATSServerBinary() (string, error) {
+	if gopathBin := filepath.Join(build.Default.GOPATH, "bin", "nats-server"); build.Default.GOPATH != "" {
+		if info, err := os.Stat(gopathBin); err == nil && !info.IsDir() {
+			return gopathBin, nil
+		}
+	}
+	return exec.LookPath("nats-server")
+}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for candidate nats port: %v", err)
+func natsPortSelectionHint(portArg, logs string) string {
+	if portArg == "0" && strings.Contains(logs, "127.0.0.1:4222") {
+		return "; requested -p 0 but this nats-server binary still tried 127.0.0.1:4222, so the helper is retrying with -p -1 for compatibility"
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close candidate nats listener: %v", err)
-	}
-	return port
+	return ""
 }
 
 func nextMockedIntegrationID() string {
