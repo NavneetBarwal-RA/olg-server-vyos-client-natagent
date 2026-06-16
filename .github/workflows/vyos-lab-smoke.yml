@@ -24,6 +24,8 @@ jobs:
     name: Real VyOS Configure Smoke
     runs-on: [self-hosted, vyos-lab]
     timeout-minutes: 20
+    env:
+      LAB_ARTIFACT_DIR: ${{ github.workspace }}/tests/lab/artifacts/github-actions
 
     steps:
       - name: Checkout
@@ -54,7 +56,7 @@ jobs:
           VYOS_PASSWORD: ${{ secrets.VYOS_PASSWORD }}
           STATE_PATH: ${{ inputs.state_path }}
           DESIRED_CONFIG_FILE: ${{ inputs.desired_config }}
-          ARTIFACT_DIR: tests/lab/artifacts/github-actions
+          ARTIFACT_DIR: ${{ env.LAB_ARTIFACT_DIR }}
         run: |
           if [ -f "$RUNNER_TEMP/vyos_lab_key" ]; then
             export VYOS_SSH_KEY="$RUNNER_TEMP/vyos_lab_key"
@@ -65,12 +67,13 @@ jobs:
       - name: Collect lab evidence
         if: always()
         env:
-          ARTIFACT_DIR: tests/lab/artifacts/github-actions
+          ARTIFACT_DIR: ${{ env.LAB_ARTIFACT_DIR }}
         run: ./tests/lab/collect-lab-evidence.sh
 
-      - name: Upload lab evidence
+      - name: Review artifact location
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vyos-lab-evidence
-          path: tests/lab/artifacts/github-actions/
+        run: |
+          echo "Lab evidence collected locally on this self-hosted runner:"
+          echo "  $LAB_ARTIFACT_DIR"
+          echo "Artifacts are not uploaded automatically."
+          echo "Review and sanitize files in that directory before sharing them in a PR, release note, or any external channel."

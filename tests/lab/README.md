@@ -3,6 +3,9 @@
 This directory contains manual/on-demand lab validation for the real VyOS path.
 It is release evidence, not normal PR CI.
 
+Lab artifacts are collected locally for review. They are not uploaded
+automatically by the manual GitHub self-hosted workflow.
+
 ## What This Proves
 
 The configure lab smoke proves:
@@ -111,15 +114,19 @@ That command exits with status `2` and writes a deferral summary artifact.
 
 ## Collect Evidence
 
-After a lab run:
+After a local lab run:
 
 ```bash
 ARTIFACT_DIR=tests/lab/artifacts/manual-run ./tests/lab/collect-lab-evidence.sh
 ```
 
-Attach the artifact directory, or an archive of it, to PR or release notes.
-Review artifacts before upload and remove any lab-specific data that should not
-leave the lab.
+After a GitHub self-hosted lab workflow run, evidence is also collected locally
+on the runner under `tests/lab/artifacts/github-actions` in the checked-out
+workspace. The workflow prints the exact path at the end of the run.
+
+Artifacts are not uploaded automatically. Before attaching the artifact
+directory, or an archive of it, to a PR or release note, review and sanitize
+the files and remove any lab-specific data that should not leave the lab.
 
 ## Secret Safety
 
@@ -128,6 +135,9 @@ leave the lab.
 - `environment-summary.txt` records whether secret variables are set, not their
   values.
 - Review `agent.log` and VyOS output before sharing outside the lab.
+- Review `vyos-before.txt`, `vyos-after.txt`, `state.json`,
+  `commands-run.txt`, and `environment-summary.txt` before attaching artifacts
+  to a PR or release note.
 
 ## Known Limitations
 
