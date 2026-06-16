@@ -25,6 +25,10 @@ placeholder behavior, so they do not need a VyOS device.
 `tests/lab` contains manual real-device scripts. They require a reachable VyOS
 VM/device, credentials, real NATS, and an agent configured for real mode.
 
+`real-vyos-configure-smoke.sh` runs in manual dependency mode only: it assumes
+the NATS server and the VyOS agent are already running and focuses on configure
+submission, verification, and evidence collection.
+
 ## Required Lab Topology
 
 - A real or disposable VyOS VM/device reachable over SSH.
@@ -36,21 +40,40 @@ VM/device, credentials, real NATS, and an agent configured for real mode.
 Use a disposable lab target. The fixtures are intended to be small WAN/WAN+LAN
 smoke configs, but they still change VyOS configuration.
 
+## Manual Prerequisites
+
+Start NATS manually on the Ubuntu host, for example:
+
+```bash
+nats-server -js -p 4222
+```
+
+Install and start the VyOS agent manually inside the VyOS VM, for example:
+
+```bash
+sudo install -m 0755 ~/vyos-nats-agent /usr/local/bin/vyos-nats-agent
+nohup /usr/local/bin/vyos-nats-agent --config ~/vyos-nats-agent.yaml >/tmp/vyos-nats-agent.log 2>&1 &
+```
+
 ## Required Environment
 
 ```bash
 export REAL_VYOS_LAB_ACK=I_UNDERSTAND
-export NATS_URL=nats://<nats-host>:4222
+export NATS_URL=nats://192.168.76.69:4222
 export VYOS_TARGET=vyos
-export VYOS_HOST=<vyos-host-or-ip>
+export VYOS_HOST=192.168.76.2
 export VYOS_USER=vyos
 export STATE_PATH=/tmp/vyos-nats-agent/state.json
+export REMOTE_AGENT_LOG=/tmp/vyos-nats-agent.log
+export DESIRED_CONFIG_FILE=tests/lab/configs/desired-vyos-wan-only-config.json
+export ARTIFACT_DIR=tests/lab/artifacts/manual-run-001
+export VYOS_SHOW_CONFIG_COMMAND="/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands"
 ```
 
 Use exactly one SSH auth method:
 
 ```bash
-export VYOS_PASSWORD='<password>'
+export VYOS_PASSWORD=vyos
 ```
 
 or:
@@ -62,26 +85,33 @@ export VYOS_SSH_KEY=/path/to/private/key
 Optional:
 
 ```bash
-export DESIRED_CONFIG_FILE=tests/lab/configs/desired-vyos-wan-only-config.json
-export ARTIFACT_DIR=tests/lab/artifacts/manual-run
 export CONFIG_UUID=cfg-lab-$(date +%s)
 export RPC_ID=real-vyos-configure-$(date +%s)
 export RESUBMIT_SAME_UUID=true
 export EXPECTED_VYOS_MATCH=OLG_APPLY_SMOKE_TEST
+export KEEP_WORK_DIR=false
 ```
-
-If the script should start the agent process on the current runner, set both:
-
-```bash
-export AGENT_BINARY=/path/to/vyos-nats-agent
-export AGENT_CONFIG_FILE=/path/to/config.yaml
-```
-
-Otherwise the script assumes the agent is already running.
 
 ## Run Configure Smoke
 
 ```bash
+./tests/lab/real-vyos-configure-smoke.sh
+```
+
+Example full run:
+
+```bash
+export REAL_VYOS_LAB_ACK=I_UNDERSTAND
+export NATS_URL=nats://192.168.76.69:4222
+export VYOS_TARGET=vyos
+export VYOS_HOST=192.168.76.2
+export VYOS_USER=vyos
+export VYOS_PASSWORD=vyos
+export STATE_PATH=/tmp/vyos-nats-agent/state.json
+export REMOTE_AGENT_LOG=/tmp/vyos-nats-agent.log
+export DESIRED_CONFIG_FILE=tests/lab/configs/desired-vyos-wan-only-config.json
+export ARTIFACT_DIR=tests/lab/artifacts/manual-run-001
+export VYOS_SHOW_CONFIG_COMMAND="/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands"
 ./tests/lab/real-vyos-configure-smoke.sh
 ```
 
@@ -97,7 +127,11 @@ The script writes evidence into `ARTIFACT_DIR`, including:
 - `commands-run.txt`
 - `environment-summary.txt`
 
-The script does not print passwords, tokens, or private keys.
+The script does not print passwords, tokens, or private keys. It copies the
+already-running agent's remote log into `agent.log` after all configure checks
+complete. Failed runs also attempt best-effort remote agent log collection
+before exit so the artifact set still includes agent-side evidence when
+possible.
 
 ## Action Trace Smoke
 
@@ -121,12 +155,15 @@ ARTIFACT_DIR=tests/lab/artifacts/manual-run ./tests/lab/collect-lab-evidence.sh
 ```
 
 After a GitHub self-hosted lab workflow run, evidence is also collected locally
-on the runner under `tests/lab/artifacts/github-actions` in the checked-out
-workspace. The workflow prints the exact path at the end of the run.
+on the runner under a per-run directory in the checked-out workspace, for
+example `tests/lab/artifacts/github-actions/run-<run_id>-attempt-<run_attempt>`.
+The workflow recreates that directory at job start and prints the exact path at
+the end of the run.
 
-Artifacts are not uploaded automatically. Before attaching the artifact
-directory, or an archive of it, to a PR or release note, review and sanitize
-the files and remove any lab-specific data that should not leave the lab.
+Artifacts are not uploaded automatically by the GitHub workflow. Before
+attaching the artifact directory, or an archive of it, to a PR or release note,
+review and sanitize the files and remove any lab-specific data that should not
+leave the lab.
 
 ## Secret Safety
 

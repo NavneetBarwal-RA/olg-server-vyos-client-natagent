@@ -1,16 +1,110 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Manual real-VyOS configure smoke helper.
+# Real-VyOS configure smoke helper.
 #
-# This script is lab-only. It submits configure through the real NATS/KV path,
-# waits for success, verifies the VyOS device state, checks the agent state file,
-# and optionally resubmits the same UUID to prove the idempotent path.
-#
-# It does not belong in normal PR CI.
+# This script is lab-only. It assumes NATS and vyos-nats-agent are already
+# running and focuses on configure submission, verification, and evidence
+# collection.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./tests/lab/real-vyos-configure-smoke.sh
+  ./tests/lab/real-vyos-configure-smoke.sh --help
+
+Purpose:
+  Run the Phase 9 real VyOS configure smoke through the real NATS + JetStream
+  path, verify VyOS config/state evidence, and optionally resubmit the same UUID
+  to prove the already-in-sync path.
+
+Manual prerequisites:
+  1. Start NATS manually on the Ubuntu host, for example:
+       nats-server -js -p 4222
+  2. Install/start vyos-nats-agent manually inside the VyOS VM, for example:
+       sudo install -m 0755 ~/vyos-nats-agent /usr/local/bin/vyos-nats-agent
+       nohup /usr/local/bin/vyos-nats-agent --config ~/vyos-nats-agent.yaml >/tmp/vyos-nats-agent.log 2>&1 &
+
+Required environment:
+  REAL_VYOS_LAB_ACK=I_UNDERSTAND
+  NATS_URL=nats://<host>:4222
+  VYOS_TARGET=vyos
+  VYOS_HOST=<host-or-ip>
+  VYOS_USER=vyos
+  STATE_PATH=/tmp/vyos-nats-agent/state.json
+  Set exactly one of:
+    VYOS_PASSWORD=<password>
+    VYOS_SSH_KEY=/path/to/private/key
+
+Optional environment:
+  DESIRED_CONFIG_FILE=tests/lab/configs/desired-vyos-wan-only-config.json
+  ARTIFACT_DIR=tests/lab/artifacts/manual-run
+  CONFIG_UUID=cfg-lab-<timestamp>
+  RPC_ID=real-vyos-configure-<timestamp>
+  TIMEOUT=120s
+  RESUBMIT_SAME_UUID=true
+  EXPECTED_VYOS_MATCH=OLG_APPLY_SMOKE_TEST
+  REMOTE_AGENT_LOG=/tmp/vyos-nats-agent.log
+  VYOS_SHOW_CONFIG_COMMAND="show configuration commands"
+  KEEP_WORK_DIR=false
+
+Mode:
+  Manual dependency mode only:
+    Start NATS and vyos-nats-agent yourself, then run the script.
+
+Examples:
+  Manual mode:
+    export REAL_VYOS_LAB_ACK=I_UNDERSTAND
+    export NATS_URL=nats://192.168.76.69:4222
+    export VYOS_TARGET=vyos
+    export VYOS_HOST=192.168.76.2
+    export VYOS_USER=vyos
+    export VYOS_PASSWORD=vyos
+    export STATE_PATH=/tmp/vyos-nats-agent/state.json
+    export REMOTE_AGENT_LOG=/tmp/vyos-nats-agent.log
+    export DESIRED_CONFIG_FILE=tests/lab/configs/desired-vyos-wan-only-config.json
+    export ARTIFACT_DIR=tests/lab/artifacts/manual-run-001
+    export VYOS_SHOW_CONFIG_COMMAND="/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands"
+    ./tests/lab/real-vyos-configure-smoke.sh
+
+Artifact outputs:
+  phase9-summary.md
+  configure-status.jsonl
+  configure-result.jsonl
+  controller.log
+  agent.log
+  vyos-before.txt
+  vyos-after.txt
+  state.json
+  commands-run.txt
+  environment-summary.txt
+
+Secret safety:
+  The script does not enable shell tracing, does not print passwords, and does
+  not write secret values to commands-run.txt or environment-summary.txt.
+  It copies the remote agent log into agent.log after configure checks finish
+  and attempts best-effort log collection on failures too. Review and sanitize
+  artifacts before sharing them outside the lab.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[FAIL] unknown argument: $1" >&2
+      echo >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 REAL_VYOS_LAB_ACK="${REAL_VYOS_LAB_ACK:-}"
 NATS_URL="${NATS_URL:-}"
@@ -24,13 +118,12 @@ STATE_PATH="${STATE_PATH:-}"
 DESIRED_CONFIG_FILE="${DESIRED_CONFIG_FILE:-${ROOT_DIR}/tests/lab/configs/desired-vyos-wan-only-config.json}"
 PAYLOAD_FILE="${PAYLOAD_FILE:-${DESIRED_CONFIG_FILE}}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-${ROOT_DIR}/tests/lab/artifacts/real-vyos-configure-$(date +%Y%m%dT%H%M%SZ)}"
-AGENT_BINARY="${AGENT_BINARY:-}"
-AGENT_CONFIG_FILE="${AGENT_CONFIG_FILE:-}"
 CONFIG_UUID="${CONFIG_UUID:-cfg-lab-$(date +%s)-$$}"
 RPC_ID="${RPC_ID:-real-vyos-configure-$(date +%s)-$$}"
 TIMEOUT="${TIMEOUT:-120s}"
 RESUBMIT_SAME_UUID="${RESUBMIT_SAME_UUID:-true}"
 EXPECTED_VYOS_MATCH="${EXPECTED_VYOS_MATCH:-OLG_APPLY_SMOKE_TEST}"
+REMOTE_AGENT_LOG="${REMOTE_AGENT_LOG:-/tmp/vyos-nats-agent.log}"
 VYOS_SHOW_CONFIG_COMMAND="${VYOS_SHOW_CONFIG_COMMAND:-show configuration commands}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
 
@@ -40,16 +133,8 @@ CONTROLLER_DIR="${WORK_DIR}/controller"
 CONTROLLER_LOG="${ARTIFACT_DIR}/controller.log"
 AGENT_LOG="${ARTIFACT_DIR}/agent.log"
 
-AGENT_PID=""
-
 cleanup() {
   set +e
-  if [[ -n "${AGENT_PID}" ]] && kill -0 "${AGENT_PID}" >/dev/null 2>&1; then
-    kill -INT "${AGENT_PID}" >/dev/null 2>&1
-    sleep 1
-    kill "${AGENT_PID}" >/dev/null 2>&1
-    wait "${AGENT_PID}" >/dev/null 2>&1
-  fi
   if [[ "${KEEP_WORK_DIR}" != "true" ]]; then
     rm -rf "${WORK_DIR}"
   else
@@ -59,6 +144,7 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
+  collect_remote_agent_log_best_effort
   echo "[FAIL] $*" >&2
   echo "" >&2
   echo "Artifacts: ${ARTIFACT_DIR}" >&2
@@ -93,12 +179,11 @@ write_environment_summary() {
     echo "state_path=${STATE_PATH}"
     echo "desired_config_file=${PAYLOAD_FILE}"
     echo "artifact_dir=${ARTIFACT_DIR}"
-    echo "agent_binary_set=$([[ -n "${AGENT_BINARY}" ]] && echo true || echo false)"
-    echo "agent_config_file_set=$([[ -n "${AGENT_CONFIG_FILE}" ]] && echo true || echo false)"
     echo "config_uuid=${CONFIG_UUID}"
     echo "rpc_id=${RPC_ID}"
     echo "resubmit_same_uuid=${RESUBMIT_SAME_UUID}"
     echo "expected_vyos_match=${EXPECTED_VYOS_MATCH}"
+    echo "remote_agent_log=${REMOTE_AGENT_LOG}"
   } > "${ARTIFACT_DIR}/environment-summary.txt"
 }
 
@@ -116,10 +201,25 @@ ssh_cmd() {
   SSHPASS="${VYOS_PASSWORD}" sshpass -e ssh "${base_args[@]}" "${VYOS_USER}@${VYOS_HOST}" "${remote_cmd}"
 }
 
+validate_no_single_quotes() {
+  local name="$1"
+  local value="$2"
+  if [[ "${value}" == *"'"* ]]; then
+    fail "${name} must not contain single quotes"
+  fi
+}
+
 copy_state_artifact() {
   local out="$1"
   if ! ssh_cmd "cat '${STATE_PATH}'" > "${out}" 2>>"${ARTIFACT_DIR}/ssh-errors.log"; then
     fail "could not read state file from VyOS host at STATE_PATH"
+  fi
+}
+
+collect_remote_agent_log_best_effort() {
+  mkdir -p "${ARTIFACT_DIR}" >/dev/null 2>&1 || true
+  if ! ssh_cmd "cat '${REMOTE_AGENT_LOG}'" > "${AGENT_LOG}" 2>>"${ARTIFACT_DIR}/ssh-errors.log"; then
+    echo "[WARN] could not collect remote agent log from ${REMOTE_AGENT_LOG}" >&2
   fi
 }
 
@@ -144,18 +244,12 @@ fi
 if [[ -z "${STATE_PATH}" ]]; then
   fail "STATE_PATH is required"
 fi
-if [[ "${STATE_PATH}" == *"'"* ]]; then
-  fail "STATE_PATH must not contain single quotes"
-fi
 if [[ ! -f "${PAYLOAD_FILE}" ]]; then
   fail "DESIRED_CONFIG_FILE not found: ${PAYLOAD_FILE}"
 fi
-if [[ -n "${AGENT_BINARY}" && -z "${AGENT_CONFIG_FILE}" ]]; then
-  fail "AGENT_CONFIG_FILE is required when AGENT_BINARY is set"
-fi
-if [[ -n "${AGENT_CONFIG_FILE}" && -z "${AGENT_BINARY}" ]]; then
-  fail "AGENT_BINARY is required when AGENT_CONFIG_FILE is set"
-fi
+
+validate_no_single_quotes "STATE_PATH" "${STATE_PATH}"
+validate_no_single_quotes "REMOTE_AGENT_LOG" "${REMOTE_AGENT_LOG}"
 
 require_cmd go
 require_cmd ssh
@@ -165,11 +259,14 @@ fi
 
 mkdir -p "${ARTIFACT_DIR}" "${CONTROLLER_DIR}"
 : > "${ARTIFACT_DIR}/commands-run.txt"
+: > "${AGENT_LOG}"
 write_environment_summary
 
 echo "[INFO] artifacts will be written to ${ARTIFACT_DIR}"
 echo "[INFO] using desired config fixture ${PAYLOAD_FILE}"
 echo "[INFO] target=${TARGET} rpc_id=${RPC_ID} uuid=${CONFIG_UUID}"
+echo "[INFO] assuming NATS server is already running at ${NATS_URL}"
+echo "[INFO] assuming vyos-nats-agent is already running on ${VYOS_HOST}"
 
 record_command "ssh show before config"
 if ! ssh_cmd "${VYOS_SHOW_CONFIG_COMMAND}" > "${ARTIFACT_DIR}/vyos-before.txt" 2>>"${ARTIFACT_DIR}/ssh-errors.log"; then
@@ -181,20 +278,6 @@ sed \
   -e "s#nats://127.0.0.1:4222#${NATS_URL}#g" \
   -e "s#target: vyos#target: ${TARGET}#g" \
   config.example.yaml > "${TMP_CONFIG}"
-
-if [[ -n "${AGENT_BINARY}" ]]; then
-  echo "[INFO] starting agent from AGENT_BINARY; output captured in artifacts"
-  record_command "${AGENT_BINARY} --config <AGENT_CONFIG_FILE>"
-  "${AGENT_BINARY}" --config "${AGENT_CONFIG_FILE}" >"${AGENT_LOG}" 2>&1 &
-  AGENT_PID="$!"
-  sleep 2
-  if ! kill -0 "${AGENT_PID}" >/dev/null 2>&1; then
-    fail "agent process exited immediately"
-  fi
-else
-  echo "[INFO] assuming vyos-nats-agent is already running in real configure mode"
-  : > "${AGENT_LOG}"
-fi
 
 cat > "${CONTROLLER_DIR}/main.go" <<'GO'
 package main
@@ -260,13 +343,13 @@ func main() {
 		fatalf("create agentcore client: %v", err)
 	}
 
-	statusFile, err := os.OpenFile(filepath.Join(artifactDir, "configure-status.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	statusFile, err := os.OpenFile(filepath.Join(artifactDir, "configure-status.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		fatalf("open status artifact: %v", err)
 	}
 	defer statusFile.Close()
 
-	resultFile, err := os.OpenFile(filepath.Join(artifactDir, "configure-result.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	resultFile, err := os.OpenFile(filepath.Join(artifactDir, "configure-result.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		fatalf("open result artifact: %v", err)
 	}
@@ -397,6 +480,9 @@ if ! grep -q "${CONFIG_UUID}" "${ARTIFACT_DIR}/state.json"; then
   fail "state artifact does not contain submitted UUID"
 fi
 
+echo "[INFO] collecting remote agent log from ${REMOTE_AGENT_LOG}"
+collect_remote_agent_log_best_effort
+
 cat > "${ARTIFACT_DIR}/phase9-summary.md" <<EOF
 # Real VyOS Configure Smoke Summary
 
@@ -407,6 +493,7 @@ cat > "${ARTIFACT_DIR}/phase9-summary.md" <<EOF
 - State path: ${STATE_PATH}
 - Same UUID resubmitted: ${RESUBMIT_SAME_UUID}
 - Expected VyOS marker: ${EXPECTED_VYOS_MATCH}
+- Remote agent log: ${REMOTE_AGENT_LOG}
 - Result: passed
 
 Rollback / revert notes:
