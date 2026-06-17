@@ -37,16 +37,17 @@ normal PR CI.
 
 No required PR CI runs real VyOS lab scripts. The optional manual workflow is:
 
-| Workflow | Trigger | Runner | Command | Artifact |
+| Workflow | Trigger | Runner | Command | Evidence handling |
 |---|---|---|---|---|
-| `.github/workflows/vyos-lab-smoke.yml` | `workflow_dispatch` only | `[self-hosted, vyos-lab]` | `./tests/lab/real-vyos-configure-smoke.sh` | `vyos-lab-evidence` |
+| `.github/workflows/vyos-lab-smoke.yml` | `workflow_dispatch` only | `[self-hosted, vyos-lab]` | `./tests/lab/real-vyos-configure-smoke.sh` | Collects evidence locally on the self-hosted runner under `tests/lab/artifacts/github-actions/run-<run_id>-attempt-<run_attempt>` and prints that path at the end of the run. Artifacts are not uploaded automatically and must be reviewed/sanitized before being shared. |
 
 ## Current Real VyOS Execution Status
 
-Real VyOS lab smoke was not executed during this implementation pass. The
-scripts and evidence collection are ready for a manual lab run, and the resulting
-artifacts should be attached to PR or release notes before claiming LAB-001
-through LAB-003 passed against a real device.
+Real VyOS configure smoke was executed manually in a disposable lab and passed for LAB-001 through LAB-003.
+
+Raw evidence artifacts were reviewed locally and intentionally not committed because they contain lab-specific configuration, private IPs, host-key data, and VyOS output. Sanitized excerpts can be provided if requested.
+
+Real trace action remains deferred until a real platform trace/rtty executor exists.
 
 ## Local Commands
 
