@@ -26,8 +26,10 @@ import (
 	vyosapply "github.com/routerarchitects/olg-renderer-vyos/apply"
 	vyosrenderer "github.com/routerarchitects/olg-renderer-vyos/renderer"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/actions"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/agent"
 	placeholderapply "github.com/routerarchitects/olg-server-vyos-client-natagent/internal/apply"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/applyvyos"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/config"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/configure"
 	internalrenderer "github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderer"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderervyos"
@@ -458,6 +460,105 @@ func TestIntegrationAgentCoreConnectionFailureHandled(t *testing.T) {
 	err := client.Start(ctx)
 	if err == nil {
 		t.Fatal("expected connection error, got nil")
+	}
+}
+
+/*
+TC-INTEGRATION-010
+Type: Integration
+Title: Startup reconcile applies latest desired config on startup using agent runtime
+Summary:
+Stores a desired config in JetStream KV, then starts the agent Runtime.
+The agent Runtime runs startup reconcile automatically on Start, rendering/applying the config,
+updating the state file, and publishing the status and result.
+
+Validates:
+  - Startup reconcile is run during agent initialization
+  - Local state is updated with the desired UUID
+  - Success status/result are published
+*/
+func TestIntegrationStartupReconcile(t *testing.T) {
+	url := startTestNATSServer(t)
+	cfg := mockedIntegrationCoreConfig(t, url)
+	target := mockedIntegrationTarget(t)
+	rpcID := "rpc-startup-reconcile"
+	uuid := "cfg-startup-reconcile"
+	payload := json.RawMessage(`{"interfaces":[{"name":"eth1","role":"lan"}]}`)
+
+	// Pre-store the desired config in JetStream KV
+	controller := newStartedClient(t, cfg, "controller")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	_, err := controller.StoreDesiredConfig(ctx, agentcore.DesiredConfigRecord{
+		Version:   mockedIntegrationWireVersion,
+		RPCID:     rpcID,
+		Target:    target,
+		UUID:      uuid,
+		Payload:   payload,
+		Timestamp: mockedIntegrationNow(),
+	})
+	if err != nil {
+		t.Fatalf("failed to pre-store desired config: %v", err)
+	}
+
+	// Create test state file path
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+
+	// Set up agent config
+	appCfg := &config.AppConfig{}
+	appCfg.Agent.Target = target
+	appCfg.Agent.StateFile = stateFile
+	appCfg.Agent.Configure.Mode = "placeholder"
+	appCfg.Agent.Logging.Level = "debug"
+
+	// Set up probe to capture published status/results
+	probe := newStartedProbe(t, cfg, target)
+
+	// Create the agent Runtime
+	runtime, err := agent.New(appCfg, cfg, agent.WithClock(mockedIntegrationNow))
+	if err != nil {
+		t.Fatalf("failed to create agent runtime: %v", err)
+	}
+
+	// Start agent runtime
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runtime.Run(runCtx)
+	}()
+
+	// Wait for the status and result
+	statuses := probe.waitStatuses(t, rpcID, "applied")
+	result := probe.waitResult(t, rpcID, "success")
+
+	// Verify that state file exists and has correct applied UUID
+	stateBytes, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("failed to read state file: %v", err)
+	}
+	var st struct {
+		AppliedUUID string `json:"applied_uuid"`
+	}
+	if err := json.Unmarshal(stateBytes, &st); err != nil {
+		t.Fatalf("failed to unmarshal state: %v", err)
+	}
+	if st.AppliedUUID != uuid {
+		t.Fatalf("state applied_uuid got=%q want=%q", st.AppliedUUID, uuid)
+	}
+
+	assertConfigureSuccessResult(t, result, target, rpcID, uuid)
+	assertStatusCorrelation(t, statuses, target, rpcID, uuid)
+
+	// Stop runtime and check error
+	runCancel()
+	select {
+	case runErr := <-errCh:
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("runtime exited with error: %v", runErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime failed to stop")
 	}
 }
 

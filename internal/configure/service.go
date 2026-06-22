@@ -149,6 +149,79 @@ func (s *Service) Handle(ctx context.Context, msg agentcore.ConfigureNotificatio
 		return nil
 	}
 
+	return s.processDesiredConfigLocked(ctx, msg, desired)
+}
+
+// Reconcile checks the KV store for the latest desired configuration and synchronizes the local state on startup.
+func (s *Service) Reconcile(ctx context.Context, target string) error {
+	if ctx == nil {
+		return errors.New("reconcile: context is nil")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	localState, err := s.stateStore.Load(ctx)
+	if err != nil {
+		s.logError("reconcile: failed to load local state", "target", target, "error", err)
+		// Non-fatal error: publish degraded status and return nil to prevent process crash
+		_ = s.publishStatus(ctx, agentcore.ConfigureNotification{Target: target}, "failure", "failed", "startup reconcile failed to load local state")
+		return nil
+	}
+
+	desired, err := s.client.LoadDesiredConfig(ctx, target)
+	if err != nil {
+		var agentcoreErr *agentcore.Error
+		if errors.As(err, &agentcoreErr) && agentcoreErr.Code == agentcore.CodeConfigNotFound {
+			s.logInfo("reconcile: no desired config exists, continuing normally", "target", target)
+			return nil
+		}
+		s.logError("reconcile: failed to load desired config", "target", target, "error", err)
+		// Non-fatal error: publish degraded status and return nil
+		_ = s.publishStatus(ctx, agentcore.ConfigureNotification{Target: target}, "failure", "failed", "startup reconcile failed to load desired config")
+		return nil
+	}
+
+	if desired == nil {
+		s.logInfo("reconcile: desired config is nil, continuing normally", "target", target)
+		return nil
+	}
+
+	if localState.AppliedUUID == desired.Record.UUID {
+		s.logInfo("reconcile: already in sync", "target", target, "uuid", desired.Record.UUID)
+		return nil
+	}
+
+	s.logInfo("reconcile: configuration drift detected, applying config", "target", target, "current_uuid", localState.AppliedUUID, "desired_uuid", desired.Record.UUID)
+
+	msg := agentcore.ConfigureNotification{
+		Version:     wireVersion,
+		RPCID:       desired.Record.RPCID,
+		Target:      desired.Record.Target,
+		CommandType: "configure",
+		UUID:        desired.Record.UUID,
+		KVBucket:    desired.Bucket,
+		KVKey:       desired.Key,
+		Timestamp:   desired.Record.Timestamp,
+	}
+
+	started := s.now()
+	defer func() {
+		s.logInfo(
+			"reconcile processing completed",
+			"target", msg.Target,
+			"rpc_id", msg.RPCID,
+			"uuid", msg.UUID,
+			"duration_ms", s.now().Sub(started).Milliseconds(),
+		)
+	}()
+
+	return s.processDesiredConfigLocked(ctx, msg, desired)
+}
+
+// processDesiredConfigLocked renders, applies, saves state, and publishes statuses/results.
+// It assumes s.mu is already held.
+func (s *Service) processDesiredConfigLocked(ctx context.Context, msg agentcore.ConfigureNotification, desired *agentcore.StoredDesiredConfig) error {
 	s.logInfo("configure rendering", "target", msg.Target, "rpc_id", msg.RPCID, "uuid", msg.UUID, "stage", "rendering")
 	if err := s.publishStatus(ctx, msg, "running", "rendering", "rendering desired config"); err != nil {
 		return s.fail(ctx, msg, "status_publish_failed", "configure processing failed", fmt.Errorf("publish configure status rendering: %w", err))

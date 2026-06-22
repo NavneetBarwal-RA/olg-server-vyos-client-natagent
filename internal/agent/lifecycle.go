@@ -103,6 +103,13 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 
+	r.logInfo("running startup reconcile", "target", r.appConfig.Agent.Target)
+	if err := r.configureService.Reconcile(ctx, r.appConfig.Agent.Target); err != nil {
+		r.logWarn("startup reconcile completed with error", "target", r.appConfig.Agent.Target, "error", err)
+	} else {
+		r.logInfo("startup reconcile completed", "target", r.appConfig.Agent.Target)
+	}
+
 	return nil
 }
 

@@ -218,13 +218,13 @@ Use real `nats-server -js` to prove:
 
 - configure end-to-end flow
 - action end-to-end flow
-- startup reconcile/latest desired config recovery (deferred until startup reconcile is implemented)
+- startup reconcile/latest desired config recovery
 
 ### Phase 6: Real configure backend
 
 Add `agent.configure.mode: placeholder | real`, keep placeholder as the default, and wire real mode through `olg-renderer-vyos` renderer/apply adapters.
 
-Startup reconcile/latest desired config recovery is documented as future work and is not implemented by the real renderer/apply integration.
+Startup reconcile/latest desired config recovery is implemented and runs automatically on agent startup.
 
 ## Common commands
 
