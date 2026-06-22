@@ -510,12 +510,18 @@ func TestIntegrationStartupReconcile(t *testing.T) {
 	appCfg.Agent.StateFile = stateFile
 	appCfg.Agent.Configure.Mode = "placeholder"
 	appCfg.Agent.Logging.Level = "debug"
-
+	appCfg.Agent.Logging.Format = "text"
 	// Set up probe to capture published status/results
 	probe := newStartedProbe(t, cfg, target)
 
-	// Create the agent Runtime
-	runtime, err := agent.New(appCfg, cfg, agent.WithClock(mockedIntegrationNow))
+	// Create logger that prints to standard output (stdout)
+	logger, err := agent.NewLogger(appCfg.Agent.Logging, os.Stdout)
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+
+	// Create the agent Runtime passing the logger
+	runtime, err := agent.New(appCfg, cfg, agent.WithClock(mockedIntegrationNow), agent.WithLogger(logger))
 	if err != nil {
 		t.Fatalf("failed to create agent runtime: %v", err)
 	}
