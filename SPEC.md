@@ -703,6 +703,10 @@ For non-fatal reconcile errors, the agent must:
 3. continue running and keep handling future configure notifications/actions,
 4. allow a later startup reconcile or explicit recover path to converge from KV.
 
+### Reconnection reconcile
+
+If the NATS connection drops and reconnects during runtime, configuration updates that occurred on the controller while the agent was offline must be synced. The agent registers a reconnect callback that runs `Reconcile(...)` asynchronously (in a new goroutine) when the NATS session is reconnected, ensuring that it doesn't block the NATS client reconnect loop.
+
 ## 25. Handler concurrency
 
 Configure apply must be serialized.
@@ -765,10 +769,25 @@ This integration test verifies startup reconcile logic.
 6. Agent updates local applied UUID.
 ```
 
+### 26.4 Reconnection reconcile
+
+This integration test verifies reconnection reconcile logic.
+
+```text
+1. Start real nats-server -js.
+2. Start vyos-nats-agent.
+3. Stop NATS server to simulate a connection drop.
+4. Controller stores a new desired config version in KV.
+5. Restart NATS server on the same port.
+6. Agent client reconnects automatically.
+7. Agent triggers asynchronous reconciliation.
+8. Assert local state file is updated and success result published back to NATS.
+```
+
 Current repository smoke scripts:
 
-- `tests/scripts/phase3-real-nats-configure-smoke.sh`
-- `tests/scripts/phase4-real-nats-action-smoke.sh`
+- `tests/smoke/real-nats-configure-smoke.sh`
+- `tests/smoke/real-nats-action-smoke.sh`
 
 These scripts run the placeholder-safe path. Real VyOS apply smoke tests, if added, must be manual/lab-only and guarded by an explicit opt-in flag.
 
@@ -882,4 +901,5 @@ Milestone 1 is complete when:
 [x] Integration test proves configure end-to-end.
 [x] Integration test proves action end-to-end.
 [x] Integration test proves startup reconcile or latest desired config recovery.
+[x] Integration test proves reconnection reconciliation on connection recovery.
 ```

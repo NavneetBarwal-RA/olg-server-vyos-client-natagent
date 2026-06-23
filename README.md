@@ -17,6 +17,8 @@ The default mode is intentionally safe for CI and local development: configure u
 - Supports `placeholder` configure mode for CI/local non-VyOS runs.
 - Supports `real` configure mode using `github.com/routerarchitects/olg-renderer-vyos` renderer/apply APIs.
 - Stores the last successfully applied config UUID locally.
+- Performs startup configuration reconciliation to sync local state with the latest KV configuration on initialization.
+- Triggers automatic configuration reconciliation on reconnecting to NATS to sync offline updates.
 - Publishes placeholder action status/result for `trace`.
 - Publishes result and status messages to the bus.
 
@@ -307,6 +309,8 @@ The current binary supports:
 - validation-only mode with safe effective-config printing
 - long-running runtime mode using `nats-agent-core` (`Start`, handler registration, status publish, graceful `Close`)
 - configure workflow using `LoadDesiredConfig(ctx, target)`, selected configure backend mode, and local applied UUID state updates after successful apply
+- startup configuration reconciliation on initialization to align local state with KV
+- automatic reconnection reconciliation triggered by NATS connection recovery to fetch offline changes
 - action workflow for `trace` using a placeholder executor, with action status/result publishing
 
 ```bash
@@ -334,12 +338,14 @@ The config file path is resolved in this order:
 
 ### Current behavior
 
-Running without `--validate-config` loads config, converts to `agentcore.Config`, creates the runtime, registers configure/action handlers, starts `agentcore`, publishes startup status, then waits for `SIGINT`/`SIGTERM` and shuts down gracefully.
+Running without `--validate-config` loads config, converts to `agentcore.Config`, creates the runtime, registers configure/action handlers, starts `agentcore`, publishes startup status, runs startup reconciliation, then waits for `SIGINT`/`SIGTERM` and shuts down gracefully.
 
-Configure handling loads desired config through `LoadDesiredConfig(ctx, target)`, verifies target/UUID, checks local `state_file`, and:
+Configure handling (both during normal configure notifications and reconciliation passes) loads desired config through `LoadDesiredConfig(ctx, target)`, verifies target/UUID, checks local `state_file`, and:
 - publishes `already_in_sync` success when desired UUID already matches local `applied_uuid`
 - otherwise runs the selected configure backend, updates local state after render/apply succeeds, and publishes configure success
 - publishes configure failure status/result with stable error codes on workflow failures
+
+During NATS reconnection, the registered reconnect handler automatically triggers a background configuration reconciliation pass to sync any updates stored in NATS KV while the agent was offline.
 
 Normal CI and smoke tests should continue to use `agent.configure.mode: placeholder`. Real mode is intended for lab validation first and should not be added to normal CI without explicit VyOS lab opt-in.
 
