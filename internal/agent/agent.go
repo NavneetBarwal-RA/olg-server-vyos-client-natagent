@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -81,6 +82,8 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 		}
 	}
 
+	var r *Runtime
+
 	var clientOpts []agentcore.Option
 	if options.logger != nil {
 		clientOpts = append(clientOpts,
@@ -93,6 +96,19 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 			}),
 		)
 	}
+
+	clientOpts = append(clientOpts, agentcore.WithReconnectHandler(func() {
+		if r == nil || r.configureService == nil {
+			return
+		}
+		go func() {
+			r.logInfo("reconnect detected, starting reconciliation pass", "target", r.appConfig.Agent.Target)
+			if err := r.configureService.Reconcile(context.Background(), r.appConfig.Agent.Target); err != nil {
+				r.logError("reconnection reconciliation failed", "error", err)
+			}
+			r.logInfo("reconnect reconciliation pass finished", "target", r.appConfig.Agent.Target)
+		}()
+	}))
 
 	client, err := agentcore.New(coreCfg, clientOpts...)
 	if err != nil {
@@ -130,7 +146,7 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 		return nil, fmt.Errorf("create action service: %w", err)
 	}
 
-	r := &Runtime{
+	r = &Runtime{
 		appConfig:        appCfg,
 		coreConfig:       coreCfg,
 		client:           client,

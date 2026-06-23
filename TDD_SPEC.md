@@ -677,6 +677,7 @@ These tests should run in CI and prove that:
 | INT-008 | `TestIntegrationMissingDesiredConfigPublishesFailure` | P0 | Negative | Missing KV config safe | Failure status; no apply |
 | INT-009 | `TestIntegrationAgentCoreConnectionFailureHandled` | P1 | Negative | Connection error safety | Clear startup failure |
 | INT-010 | `TestIntegrationStartupReconcile` | P0 | Integration | Startup reconcile applies config on startup using agent runtime | Startup reconcile runs on Start; state is updated with desired UUID; success published |
+| INT-011 | `TestIntegrationReconnectReconcile` | P0 | Integration | Reconnect triggers asynchronous Reconcile on the agent | Reconnect triggers asynchronous Reconcile; state file is updated and success result published |
 
 ## 17.3 Acceptance Criteria
 
