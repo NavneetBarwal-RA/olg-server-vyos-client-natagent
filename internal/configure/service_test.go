@@ -1181,3 +1181,91 @@ func TestReconcileStateLoadFailure(t *testing.T) {
 		t.Fatalf("expected failure status, got statuses: %+v", client.statuses)
 	}
 }
+
+/*
+TC-CONFIGURE-SERVICE-018
+Type: Positive
+Title: Reconcile serializes concurrent configure processing with Handle
+Summary:
+Starts a Handle call and a Reconcile call concurrently. While Handle is blocked in renderer,
+Reconcile must be blocked and must not enter render/apply/save before Handle is released.
+
+Validates:
+  - Reconcile is serialized and blocked by Handle on service mutex.
+*/
+func TestReconcileSerializesConcurrentConfigureProcessing(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstRenderEntered := make(chan struct{})
+	secondRenderEntered := make(chan struct{})
+	secondStarted := make(chan struct{})
+	applyCh := make(chan string, 2)
+	saveCh := make(chan string, 2)
+
+	client := &fakeConfigureClient{
+		desiredByTarget: map[string]*agentcore.StoredDesiredConfig{
+			"vyos":   newDesired("vyos", "cfg-15-a"),
+			"vyos-r": newDesired("vyos", "cfg-15-b"),
+		},
+		desired: newDesired("vyos", "cfg-15-b"),
+	}
+	store := &fakeStateStore{
+		saveCh:    saveCh,
+		loadState: state.State{AppliedUUID: "cfg-old"},
+	}
+	rndr := &blockingRenderer{
+		firstEntered:  firstRenderEntered,
+		secondEntered: secondRenderEntered,
+		releaseFirst:  firstRelease,
+	}
+	apply := &fakeApplyEngine{applyCh: applyCh}
+	svc := newConfigureServiceForTest(t, client, store, rndr, apply, time.Now)
+
+	msg1 := agentcore.ConfigureNotification{Version: "1.0", RPCID: "rpc-15-a", Target: "vyos", UUID: "cfg-15-a"}
+	errCh := make(chan error, 2)
+
+	go func() {
+		errCh <- svc.Handle(context.Background(), msg1)
+	}()
+
+	select {
+	case <-firstRenderEntered:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Handle did not enter renderer")
+	}
+
+	go func() {
+		close(secondStarted)
+		errCh <- svc.Reconcile(context.Background(), "vyos")
+	}()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Reconcile did not start")
+	}
+
+	select {
+	case <-secondRenderEntered:
+		t.Fatal("Reconcile entered renderer before Handle release")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(firstRelease)
+
+	select {
+	case <-secondRenderEntered:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Reconcile did not enter renderer after Handle release")
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Reconcile error: %v", err)
+	}
+
+	if rndr.calls != 2 || apply.calls != 2 || store.saveCalls != 2 {
+		t.Fatalf("calls renderer=%d apply=%d save=%d want 2/2/2", rndr.calls, apply.calls, store.saveCalls)
+	}
+}

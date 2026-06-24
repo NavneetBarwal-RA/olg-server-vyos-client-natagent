@@ -221,6 +221,7 @@ Use real `nats-server -js` to prove:
 - configure end-to-end flow
 - action end-to-end flow
 - startup reconcile/latest desired config recovery
+- reconnect-triggered reconciliation flow
 
 ### Phase 6: Real configure backend
 

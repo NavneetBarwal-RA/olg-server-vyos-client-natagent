@@ -122,6 +122,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 		return nil
 	}
 
+	r.cancel()
+	r.wg.Wait()
+
 	r.logInfo("agentcore client closing", "target", r.appConfig.Agent.Target)
 	if err := r.client.Close(ctx); err != nil {
 		return fmt.Errorf("close agentcore client: %w", err)

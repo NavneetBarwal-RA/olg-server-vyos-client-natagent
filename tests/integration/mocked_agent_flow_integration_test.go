@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"go/build"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -568,41 +569,165 @@ func TestIntegrationStartupReconcile(t *testing.T) {
 	}
 }
 
+// safeBuffer is a thread-safe bytes.Buffer wrapper that also mirrors writes to stdout.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	os.Stdout.Write(p)
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+type tcpProxy struct {
+	listener net.Listener
+	target   string
+	conns    []net.Conn
+	mu       sync.Mutex
+	closed   bool
+}
+
+func startProxy(t *testing.T, targetAddr string) *tcpProxy {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start proxy listener: %v", err)
+	}
+	p := &tcpProxy{listener: l, target: targetAddr}
+	go p.run()
+	return p
+}
+
+func (p *tcpProxy) run() {
+	for {
+		conn, err := p.listener.Accept()
+		if err != nil {
+			return
+		}
+		p.mu.Lock()
+		if p.closed {
+			conn.Close()
+			p.mu.Unlock()
+			continue
+		}
+		p.conns = append(p.conns, conn)
+		p.mu.Unlock()
+
+		go p.handle(conn)
+	}
+}
+
+func (p *tcpProxy) handle(src net.Conn) {
+	dst, err := net.Dial("tcp", p.target)
+	if err != nil {
+		src.Close()
+		return
+	}
+	p.mu.Lock()
+	if p.closed {
+		src.Close()
+		dst.Close()
+		p.mu.Unlock()
+		return
+	}
+	p.conns = append(p.conns, dst)
+	p.mu.Unlock()
+
+	go func() {
+		defer src.Close()
+		defer dst.Close()
+		_, _ = io.Copy(src, dst)
+	}()
+	go func() {
+		defer src.Close()
+		defer dst.Close()
+		_, _ = io.Copy(dst, src)
+	}()
+}
+
+func (p *tcpProxy) pause() {
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
+	p.closeConns()
+}
+
+func (p *tcpProxy) resume() {
+	p.mu.Lock()
+	p.closed = false
+	p.mu.Unlock()
+}
+
+func (p *tcpProxy) closeConns() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		c.Close()
+	}
+	p.conns = nil
+}
+
+func (p *tcpProxy) close() {
+	p.closeConns()
+	p.listener.Close()
+}
+
 /*
 TC-INTEGRATION-011
 Type: Integration
 Title: Agent automatically reconciles after connection reconnects during runtime
 Summary:
-Starts the NATS server and the agent runtime. Performs initial boot reconciliation.
-Then, shuts down the NATS server, registers a new desired config version to NATS KV,
-restarts the NATS server on the same port, and asserts that the agent client reconnects,
-triggers reconciliation, updates the state file, and publishes success result.
+Starts NATS server, creates a TCP proxy, starts the agent pointing to the proxy,
+performs initial boot reconciliation. Then pauses the proxy to take the agent offline.
+Writes a new desired configuration to NATS KV using a controller client.
+Resumes the proxy, permitting the agent client to reconnect. Asserts that the agent
+automatically triggers reconciliation via the reconnect handler (incrementing the counter and logging),
+updates the state file, and publishes success result.
 
 Validates:
   - Initial boot reconciliation works.
-  - Stopping NATS disconnects the agent.
-  - Reconnect triggers asynchronous Reconcile on the agent.
+  - Proxy pause disconnects the agent.
+  - New desired config is stored offline before reconnecting.
+  - Reconnection triggers reconciliation pass specifically from reconnect handler.
   - State file is updated and success result published.
 */
 func TestIntegrationReconnectReconcile(t *testing.T) {
-	url, stopNATS := startTestNATSServerWithStop(t)
-	defer stopNATS()
+	natsUrl := startTestNATSServer(t)
 
-	parts := strings.Split(url, ":")
-	port := parts[len(parts)-1]
+	// Resolve target NATS server IP/port
+	parts := strings.Split(natsUrl, ":")
+	natsAddr := "127.0.0.1:" + parts[len(parts)-1]
 
-	cfg := mockedIntegrationCoreConfig(t, url)
+	proxy := startProxy(t, natsAddr)
+	defer proxy.close()
+
+	proxyUrl := "nats://" + proxy.listener.Addr().String()
+
+	cfgAgent := mockedIntegrationCoreConfig(t, proxyUrl)
 	// Enable MaxReconnects and short ReconnectWait so reconnect happens quickly
-	cfg.NATS.MaxReconnects = -1
-	cfg.NATS.ReconnectWait = 100 * time.Millisecond
+	cfgAgent.NATS.MaxReconnects = -1
+	cfgAgent.NATS.ReconnectWait = 100 * time.Millisecond
+
+	cfgDirect := cfgAgent
+	cfgDirect.NATS.Servers = []string{natsUrl}
+	cfgDirect.NATS.MaxReconnects = 0
+	cfgDirect.NATS.ReconnectWait = 0
 
 	target := mockedIntegrationTarget(t)
 	rpcIDInitial := "rpc-initial"
 	uuidInitial := "cfg-initial"
 	payloadInitial := json.RawMessage(`{"interfaces":[{"name":"eth1","role":"lan"}]}`)
 
-	// Pre-store the initial desired config in JetStream KV
-	controller := newStartedClient(t, cfg, "controller")
+	// Pre-store the initial desired config in JetStream KV directly on NATS
+	controller := newStartedClient(t, cfgDirect, "controller")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	_, err := controller.StoreDesiredConfig(ctx, agentcore.DesiredConfigRecord{
@@ -628,14 +753,15 @@ func TestIntegrationReconnectReconcile(t *testing.T) {
 	appCfg.Agent.Logging.Level = "debug"
 	appCfg.Agent.Logging.Format = "text"
 
-	// Create logger that prints to standard output (stdout)
-	logger, err := agent.NewLogger(appCfg.Agent.Logging, os.Stdout)
+	// Create logger that captures output to logBuf
+	logBuf := &safeBuffer{}
+	logger, err := agent.NewLogger(appCfg.Agent.Logging, logBuf)
 	if err != nil {
 		t.Fatalf("failed to create logger: %v", err)
 	}
 
 	// Create the agent Runtime passing the logger
-	runtime, err := agent.New(appCfg, cfg, agent.WithClock(mockedIntegrationNow), agent.WithLogger(logger))
+	runtime, err := agent.New(appCfg, cfgAgent, agent.WithClock(mockedIntegrationNow), agent.WithLogger(logger))
 	if err != nil {
 		t.Fatalf("failed to create agent runtime: %v", err)
 	}
@@ -649,28 +775,24 @@ func TestIntegrationReconnectReconcile(t *testing.T) {
 		errCh <- runtime.Run(runCtx)
 	}()
 
-	// Wait for the initial boot reconciliation success
-	probe := newStartedProbe(t, cfg, target)
+	// Wait for the initial boot reconciliation success on NATS directly
+	probe := newStartedProbe(t, cfgDirect, target)
 	probe.waitResult(t, rpcIDInitial, "success")
 
-	// Simulate NATS disconnection by stopping NATS server
-	stopNATS()
+	// Simulate NATS disconnection by pausing TCP proxy
+	proxy.pause()
 
 	// Wait a moment for client to detect disconnect
 	time.Sleep(200 * time.Millisecond)
 
-	// Start NATS server back up on the same port
-	stopNATS = startTestNATSServerOnPort(t, port)
-
-	// Connect a new controller client to NATS to write the new desired config version
-	controller2 := newStartedClient(t, cfg, "controller-2")
+	// Write new desired config to KV directly on NATS *while* agent is offline
 	rpcIDNew := "rpc-new"
 	uuidNew := "cfg-new"
 	payloadNew := json.RawMessage(`{"interfaces":[{"name":"eth1","role":"lan"},{"name":"eth2","role":"wan"}]}`)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel2()
-	_, err = controller2.StoreDesiredConfig(ctx2, agentcore.DesiredConfigRecord{
+	_, err = controller.StoreDesiredConfig(ctx2, agentcore.DesiredConfigRecord{
 		Version:   mockedIntegrationWireVersion,
 		RPCID:     rpcIDNew,
 		Target:    target,
@@ -682,11 +804,11 @@ func TestIntegrationReconnectReconcile(t *testing.T) {
 		t.Fatalf("failed to store new desired config during offline: %v", err)
 	}
 
-	// Create a new probe client to wait for the result
-	probe2 := newStartedProbe(t, cfg, target)
+	// Resume TCP proxy to let agent client reconnect
+	proxy.resume()
 
 	// Wait for the agent to reconnect and run reconnect-triggered reconciliation
-	result := probe2.waitResult(t, rpcIDNew, "success")
+	result := probe.waitResult(t, rpcIDNew, "success")
 
 	// Verify that state file exists and has the new applied UUID
 	stateBytes, err := os.ReadFile(stateFile)
@@ -714,6 +836,20 @@ func TestIntegrationReconnectReconcile(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime failed to stop")
+	}
+
+	// Assert the reconnect handler was indeed called and triggered reconciliation specifically
+	if runtime.ReconnectReconcileCount() != 1 {
+		t.Fatalf("expected reconnect reconciliation count to be 1, got %d", runtime.ReconnectReconcileCount())
+	}
+
+	// Assert log messages guarantee that the reconciliation was triggered by the reconnect handler
+	logs := logBuf.String()
+	if !strings.Contains(logs, "reconnect detected, starting reconciliation pass") {
+		t.Fatal("expected logs to contain reconnect reconciliation start message")
+	}
+	if !strings.Contains(logs, "reconnect reconciliation pass finished") {
+		t.Fatal("expected logs to contain reconnect reconciliation finish message")
 	}
 }
 

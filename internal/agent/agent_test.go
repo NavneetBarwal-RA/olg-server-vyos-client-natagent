@@ -1,14 +1,19 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/routerarchitects/nats-agent-core/agentcore"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/apply"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/applyvyos"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/config"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/configure"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderer"
 	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/renderervyos"
+	"github.com/routerarchitects/olg-server-vyos-client-natagent/internal/state"
 )
 
 /*
@@ -128,5 +133,134 @@ func TestNewConfigureEnginesRejectsInvalidMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agent.configure.mode") {
 		t.Fatalf("error %q does not mention agent.configure.mode", err.Error())
+	}
+}
+
+type mockAgentCoreClient struct {
+	desired *agentcore.StoredDesiredConfig
+	err     error
+}
+
+func (m *mockAgentCoreClient) LoadDesiredConfig(ctx context.Context, target string) (*agentcore.StoredDesiredConfig, error) {
+	return m.desired, m.err
+}
+
+func (m *mockAgentCoreClient) PublishStatus(ctx context.Context, msg agentcore.StatusEnvelope) error {
+	return nil
+}
+
+func (m *mockAgentCoreClient) PublishResult(ctx context.Context, msg agentcore.ResultEnvelope) error {
+	return nil
+}
+
+type mockStateStore struct {
+	loadFunc func(ctx context.Context) (state.State, error)
+}
+
+func (m *mockStateStore) Load(ctx context.Context) (state.State, error) {
+	if m.loadFunc != nil {
+		return m.loadFunc(ctx)
+	}
+	return state.State{}, nil
+}
+
+func (m *mockStateStore) Save(ctx context.Context, s state.State) error {
+	return nil
+}
+
+type mockRenderer struct{}
+
+func (m *mockRenderer) Render(ctx context.Context, d agentcore.StoredDesiredConfig) (renderer.Output, error) {
+	return renderer.Output{}, nil
+}
+
+type mockApplyEngine struct{}
+
+func (m *mockApplyEngine) Apply(ctx context.Context, o renderer.Output) error {
+	return nil
+}
+
+/*
+TC-AGENT-LIFE-010
+Type: Safety
+Title: Shutting down runtime cancels active reconnect reconcile and leaves no stray goroutines
+Summary:
+Starts the agent and triggers a reconnect-triggered reconciliation pass.
+The reconciliation pass blocks in the state store Load method. Calling Close() must cancel
+the context, causing the reconnect goroutine to unblock and exit, and Close()
+must wait for it to complete.
+
+Validates:
+  - Close() cancels context and waits for reconnect reconciliation goroutine.
+  - No stray goroutines are left running.
+*/
+func TestRuntimeCloseCancelsActiveReconnectReconcile(t *testing.T) {
+	appCfg := config.DefaultAppConfig()
+	appCfg.Agent.Target = "vyos"
+	coreCfg := agentcore.Config{}
+
+	r, err := New(&appCfg, coreCfg)
+	if err != nil {
+		t.Fatalf("failed to create agent runtime: %v", err)
+	}
+
+	blockCh := make(chan struct{})
+	loadEntered := make(chan struct{})
+
+	stateStore := &mockStateStore{
+		loadFunc: func(ctx context.Context) (state.State, error) {
+			close(loadEntered)
+			select {
+			case <-blockCh:
+				return state.State{}, nil
+			case <-ctx.Done():
+				return state.State{}, ctx.Err()
+			}
+		},
+	}
+
+	client := &mockAgentCoreClient{}
+	rndr := &mockRenderer{}
+	apply := &mockApplyEngine{}
+
+	configureService, err := configure.NewService(configure.Dependencies{
+		Client:      client,
+		StateStore:  stateStore,
+		Renderer:    rndr,
+		ApplyEngine: apply,
+		Now:         r.now,
+	})
+	if err != nil {
+		t.Fatalf("failed to create configure service: %v", err)
+	}
+
+	r.configureService = configureService
+
+	// Simulate starting reconnect reconciliation goroutine (as in agentcore WithReconnectHandler)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.reconnectReconcileCount.Add(1)
+		_ = r.configureService.Reconcile(r.ctx, "vyos")
+	}()
+
+	// Wait for the state store Load to be entered and blocked
+	select {
+	case <-loadEntered:
+	case <-time.After(1 * time.Second):
+		t.Fatal("reconcile goroutine did not start or load state")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = r.Close(context.Background())
+		close(closeDone)
+	}()
+
+	// Verify that Close returns and unblocks
+	select {
+	case <-closeDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Close blocked and did not return (possibly didn't cancel context or wait properly)")
 	}
 }

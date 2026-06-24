@@ -775,13 +775,13 @@ This integration test verifies reconnection reconcile logic.
 
 ```text
 1. Start real nats-server -js.
-2. Start vyos-nats-agent.
-3. Stop NATS server to simulate a connection drop.
-4. Controller stores a new desired config version in KV.
-5. Restart NATS server on the same port.
-6. Agent client reconnects automatically.
+2. Start TCP proxy forwarding to NATS server.
+3. Start vyos-nats-agent pointing to the proxy.
+4. Pause the TCP proxy to simulate connection drop (agent goes offline).
+5. Controller writes a new desired config version directly to NATS KV.
+6. Resume the TCP proxy (agent reconnects automatically).
 7. Agent triggers asynchronous reconciliation.
-8. Assert local state file is updated and success result published back to NATS.
+8. Assert reconciliation counter is incremented, logs verify execution, local state file is updated, and success result is published.
 ```
 
 ### 26.5 Startup reconcile failure

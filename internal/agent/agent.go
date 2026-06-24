@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/routerarchitects/nats-agent-core/agentcore"
@@ -32,9 +33,13 @@ type Runtime struct {
 	configureService *configure.Service
 	actionService    *actions.Service
 
-	mu      sync.Mutex
-	started bool
-	closed  bool
+	mu                      sync.Mutex
+	started                 bool
+	closed                  bool
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	wg                      sync.WaitGroup
+	reconnectReconcileCount atomic.Uint64
 }
 
 type runtimeOptions struct {
@@ -98,12 +103,23 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 	}
 
 	clientOpts = append(clientOpts, agentcore.WithReconnectHandler(func() {
-		if r == nil || r.configureService == nil {
+		if r == nil {
 			return
 		}
+		r.mu.Lock()
+		if r.closed || r.configureService == nil {
+			r.mu.Unlock()
+			return
+		}
+		ctx := r.ctx
+		r.wg.Add(1)
+		r.mu.Unlock()
+
 		go func() {
+			defer r.wg.Done()
+			r.reconnectReconcileCount.Add(1)
 			r.logInfo("reconnect detected, starting reconciliation pass", "target", r.appConfig.Agent.Target)
-			if err := r.configureService.Reconcile(context.Background(), r.appConfig.Agent.Target); err != nil {
+			if err := r.configureService.Reconcile(ctx, r.appConfig.Agent.Target); err != nil {
 				r.logError("reconnection reconciliation failed", "error", err)
 			}
 			r.logInfo("reconnect reconciliation pass finished", "target", r.appConfig.Agent.Target)
@@ -146,6 +162,7 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 		return nil, fmt.Errorf("create action service: %w", err)
 	}
 
+	rCtx, rCancel := context.WithCancel(context.Background())
 	r = &Runtime{
 		appConfig:        appCfg,
 		coreConfig:       coreCfg,
@@ -154,6 +171,8 @@ func New(appCfg *config.AppConfig, coreCfg agentcore.Config, opts ...Option) (*R
 		now:              options.now,
 		configureService: configureService,
 		actionService:    actionService,
+		ctx:              rCtx,
+		cancel:           rCancel,
 	}
 	r.logInfo("agentcore client created", "target", r.appConfig.Agent.Target)
 	return r, nil
@@ -205,4 +224,9 @@ func configureDebugConfig(appCfg *config.AppConfig) configure.DebugLogging {
 		LogRendered:  appCfg.Agent.Debug.LogRendered,
 		LogApplyPlan: appCfg.Agent.Debug.LogApplyPlan,
 	}
+}
+
+// ReconnectReconcileCount returns the count of reconnect-triggered reconciliation passes.
+func (r *Runtime) ReconnectReconcileCount() uint64 {
+	return r.reconnectReconcileCount.Load()
 }
