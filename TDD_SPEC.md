@@ -522,7 +522,7 @@ These test cases specifically target the real `VyOSTraceExecutor` implementation
 | TC-ACTIONS-TRACE-003 | `TestVyOSTraceExecutorContextCancellation` | P0 | Negative | Aborts execution on parent context cancellation | No upload; returns capture aborted error |
 | TC-ACTIONS-TRACE-004 | `TestVyOSTraceExecutorHTTPFailure` | P0 | Negative | Handles HTTP upload errors gracefully | PCAP file cleaned up; upload failed status returned |
 | TC-ACTIONS-TRACE-005 | `TestVyOSTraceExecutorRPCTraversalSafe` | P0 | Safety | Directory traversal protection on RPCID | Temp file created inside secure OS temp dir; no traversal |
-| TC-ACTIONS-TRACE-006 | `TestVyOSTraceExecutorParameterBounds` | P0 | Negative | Enforces duration and packets maximum limit boundaries | Bounds (300s, 10000 packets) enforced; rejected with ErrInvalidActionPayload |
+| TC-ACTIONS-TRACE-006 | `TestVyOSTraceExecutorParameterBounds` | P0 | Negative | Enforces duration and packets parameter boundaries | Reject negative values and values exceeding maximum limits (300s, 10000 packets) |
 | TC-ACTIONS-TRACE-007 | `TestVyOSTraceExecutorInterfaceValidation` | P0 | Safety | Validates interface name against command injection | Rejects dots, slashes, or special shell chars; allows ethX/bondX/vlanX/etc |
 | TC-ACTIONS-TRACE-008 | `TestVyOSTraceExecutorLargeUploadStreaming` | P0 | Positive | Streaming multipart upload functionality | Large file upload streams successfully using zero-copy pipeline |
 

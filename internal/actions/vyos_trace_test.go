@@ -418,6 +418,14 @@ func TestVyOSTraceExecutorParameterBounds(t *testing.T) {
 			name:    "packets exceeds limit",
 			payload: `{"interface":"eth0","packets":10001,"uri":"http://localhost"}`,
 		},
+		{
+			name:    "duration negative",
+			payload: `{"interface":"eth0","duration":-1,"uri":"http://localhost"}`,
+		},
+		{
+			name:    "packets negative",
+			payload: `{"interface":"eth0","packets":-1,"uri":"http://localhost"}`,
+		},
 	}
 
 	for _, tc := range cases {

@@ -105,11 +105,11 @@ func (e *VyOSTraceExecutor) Execute(ctx context.Context, msg agentcore.ActionCom
 	}
 
 	// Validate parameter bounds
-	if payload.Duration > maxDuration {
-		return Output{}, fmt.Errorf("%w: duration %d exceeds maximum limit of %d seconds", ErrInvalidActionPayload, payload.Duration, maxDuration)
+	if payload.Duration < 0 || payload.Duration > maxDuration {
+		return Output{}, fmt.Errorf("%w: duration %d must be between 0 and %d seconds", ErrInvalidActionPayload, payload.Duration, maxDuration)
 	}
-	if payload.Packets > maxPackets {
-		return Output{}, fmt.Errorf("%w: packets %d exceeds maximum limit of %d", ErrInvalidActionPayload, payload.Packets, maxPackets)
+	if payload.Packets < 0 || payload.Packets > maxPackets {
+		return Output{}, fmt.Errorf("%w: packets %d must be between 0 and %d", ErrInvalidActionPayload, payload.Packets, maxPackets)
 	}
 
 	// Validate interface
