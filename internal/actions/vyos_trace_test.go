@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,17 +28,27 @@ func (c *fakeCommand) Run() error {
 }
 
 type fakeCommandRunner struct {
-	calls    int
-	lastArgs []string
-	runErr   error
-	runFunc  func() error
+	calls        int
+	lastArgs     []string
+	runErr       error
+	runFunc      func() error
+	lastPcapPath string
 }
 
 func (r *fakeCommandRunner) Command(ctx context.Context, name string, args ...string) Command {
 	r.calls++
 	r.lastArgs = args
+	for i, arg := range args {
+		if arg == "-w" && i+1 < len(args) {
+			r.lastPcapPath = args[i+1]
+			break
+		}
+	}
 	return &fakeCommand{
 		runFunc: func() error {
+			if r.lastPcapPath != "" {
+				_ = os.WriteFile(r.lastPcapPath, []byte("pcap-contents"), 0o600)
+			}
 			if r.runFunc != nil {
 				return r.runFunc()
 			}
@@ -92,14 +103,7 @@ func TestVyOSTraceExecutorHappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := &fakeCommandRunner{
-		runFunc: func() error {
-			// Mock writing a dummy PCAP file
-			rpcID := "rpc-trace-1"
-			pcapPath := filepath.Join("/tmp", "pcap-"+rpcID+".pcap")
-			return os.WriteFile(pcapPath, []byte("pcap-contents"), 0o600)
-		},
-	}
+	runner := &fakeCommandRunner{}
 
 	exec := NewVyOSTraceExecutor(runner, server.Client())
 	msg := agentcore.ActionCommand{
@@ -129,7 +133,7 @@ func TestVyOSTraceExecutorHappyPath(t *testing.T) {
 	if runner.calls != 1 {
 		t.Fatalf("expected 1 command runner call, got %d", runner.calls)
 	}
-	expectedArgs := []string{"-U", "-i", "eth0", "-w", "/tmp/pcap-rpc-trace-1.pcap", "-c", "50"}
+	expectedArgs := []string{"-U", "-i", "eth0", "-w", runner.lastPcapPath, "-c", "50"}
 	if len(runner.lastArgs) != len(expectedArgs) {
 		t.Fatalf("args len mismatch: got %+v, want %+v", runner.lastArgs, expectedArgs)
 	}
@@ -143,12 +147,12 @@ func TestVyOSTraceExecutorHappyPath(t *testing.T) {
 	if string(uploadedFileContent) != "pcap-contents" {
 		t.Fatalf("uploaded content got %q want %q", string(uploadedFileContent), "pcap-contents")
 	}
-	if formFileName != "pcap-rpc-trace-1.pcap" {
-		t.Fatalf("uploaded file name got %q want %q", formFileName, "pcap-rpc-trace-1.pcap")
+	if formFileName != filepath.Base(runner.lastPcapPath) {
+		t.Fatalf("uploaded file name got %q want %q", formFileName, filepath.Base(runner.lastPcapPath))
 	}
 
 	// Verify local cleanup
-	if _, err := os.Stat("/tmp/pcap-rpc-trace-1.pcap"); !os.IsNotExist(err) {
+	if _, err := os.Stat(runner.lastPcapPath); !os.IsNotExist(err) {
 		t.Fatalf("expected pcap file to be cleaned up, stat returned: %v", err)
 	}
 }
@@ -162,7 +166,7 @@ Asserts payload structure validation constraints on the input payload,
 including required fields, interface format to prevent command injection,
 and HTTP/HTTPS URI scheme check.
 Validates:
-  - interface name format matching ^[a-z0-9\.\-]+$
+  - interface name format matching strict rules
   - upload URI scheme (only http/https are allowed)
   - json structure validity
   - empty target or rpc ID validation
@@ -309,12 +313,7 @@ func TestVyOSTraceExecutorHTTPFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := &fakeCommandRunner{
-		runFunc: func() error {
-			pcapPath := filepath.Join("/tmp", "pcap-rpc-trace-http-fail.pcap")
-			return os.WriteFile(pcapPath, []byte("dummy-pcap"), 0o600)
-		},
-	}
+	runner := &fakeCommandRunner{}
 
 	exec := NewVyOSTraceExecutor(runner, server.Client())
 	msg := agentcore.ActionCommand{
@@ -339,7 +338,213 @@ func TestVyOSTraceExecutorHTTPFailure(t *testing.T) {
 	}
 
 	// Verify local cleanup happens even on HTTP upload failures
-	if _, err := os.Stat("/tmp/pcap-rpc-trace-http-fail.pcap"); !os.IsNotExist(err) {
+	if _, err := os.Stat(runner.lastPcapPath); !os.IsNotExist(err) {
 		t.Fatalf("expected pcap file to be cleaned up, stat returned: %v", err)
+	}
+}
+
+/*
+TC-ACTIONS-TRACE-005
+Type: Positive / Security
+Title: RPCID containing directory traversal characters is safely encapsulated
+Summary:
+Passes an RPCID with directory traversal characters (e.g., "../../etc/shadow").
+Verifies that the file path is safely generated in the default temp directory
+using os.CreateTemp and does not write to the traversal location.
+Validates:
+  - PCAP file is safely created inside the OS temp directory
+  - path traversal attempt does not write to the targeted system path
+*/
+func TestVyOSTraceExecutorRPCTraversalSafe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	runner := &fakeCommandRunner{}
+	exec := NewVyOSTraceExecutor(runner, server.Client())
+
+	msg := agentcore.ActionCommand{
+		Version: "1.0",
+		RPCID:   "../../etc/shadow",
+		Target:  "vyos",
+		Action:  ActionTrace,
+		Payload: json.RawMessage(`{
+			"interface": "eth0",
+			"duration": 5,
+			"uri": "` + server.URL + `"
+		}`),
+	}
+
+	_, err := exec.Execute(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that the actual temp file path did not escape the temp folder
+	pcapPath := runner.lastPcapPath
+	if strings.Contains(pcapPath, "..") {
+		t.Fatalf("expected path to be sanitized, got: %q", pcapPath)
+	}
+	if filepath.Base(pcapPath) == "shadow" {
+		t.Fatalf("unexpected file creation target: %q", pcapPath)
+	}
+}
+
+/*
+TC-ACTIONS-TRACE-006
+Type: Negative
+Title: Duration and packets boundaries are enforced
+Summary:
+Passes duration and packets payloads that exceed the max limit constants.
+Verifies that the executor rejects them with ErrInvalidActionPayload.
+Validates:
+  - duration exceeding maxDuration (300) is rejected
+  - packets exceeding maxPackets (10000) is rejected
+*/
+func TestVyOSTraceExecutorParameterBounds(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	exec := NewVyOSTraceExecutor(runner, nil)
+
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "duration exceeds limit",
+			payload: `{"interface":"eth0","duration":301,"uri":"http://localhost"}`,
+		},
+		{
+			name:    "packets exceeds limit",
+			payload: `{"interface":"eth0","packets":10001,"uri":"http://localhost"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := agentcore.ActionCommand{
+				Version: "1.0",
+				RPCID:   "rpc-1",
+				Target:  "vyos",
+				Action:  ActionTrace,
+				Payload: json.RawMessage(tc.payload),
+			}
+			_, err := exec.Execute(context.Background(), msg)
+			if !errors.Is(err, ErrInvalidActionPayload) {
+				t.Fatalf("expected ErrInvalidActionPayload, got %v", err)
+			}
+		})
+	}
+}
+
+/*
+TC-ACTIONS-TRACE-007
+Type: Negative / Positive
+Title: Strict interface naming validation
+Summary:
+Passes valid VyOS interface names (matching regex) and malicious/path traversal values.
+Verifies that only valid ones are allowed and slashes/dots directory traversals are rejected.
+Validates:
+  - eth0, bond12, dum99, vlan10.20, lo are accepted via fallback regex or sys classnet check
+  - invalid names like eth/0, eth0..1, malicious shell characters, or slashes are rejected
+*/
+func TestVyOSTraceExecutorInterfaceValidation(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	exec := NewVyOSTraceExecutor(runner, nil)
+
+	cases := []struct {
+		name        string
+		iface       string
+		expectError bool
+	}{
+		{"valid eth", "eth0", false},
+		{"valid bond", "bond99", false},
+		{"valid dum", "dum1", false},
+		{"valid subinterface", "eth0.100", false},
+		{"invalid slash", "eth/0", true},
+		{"invalid backslash", "eth\\0", true},
+		{"invalid dots", "eth0..1", true},
+		{"invalid command injection", "eth0;ls", true},
+		{"invalid random name", "invalidname", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payloadMap := map[string]any{
+				"interface": tc.iface,
+				"uri":       "http://localhost",
+			}
+			payloadBytes, err := json.Marshal(payloadMap)
+			if err != nil {
+				t.Fatalf("failed to marshal payload: %v", err)
+			}
+			msg := agentcore.ActionCommand{
+				Version: "1.0",
+				RPCID:   "rpc-1",
+				Target:  "vyos",
+				Action:  ActionTrace,
+				Payload: json.RawMessage(payloadBytes),
+			}
+			_, err = exec.Execute(context.Background(), msg)
+			if tc.expectError {
+				if err == nil || !strings.Contains(err.Error(), "invalid interface name") {
+					t.Fatalf("expected invalid interface error, got: %v", err)
+				}
+			} else {
+				if err != nil && strings.Contains(err.Error(), "invalid interface name") {
+					t.Fatalf("unexpected interface validation failure: %v", err)
+				}
+			}
+		})
+	}
+}
+
+/*
+TC-ACTIONS-TRACE-008
+Type: Positive
+Title: Stream upload handles large files via pipe
+Summary:
+Creates a large trace PCAP mock file (e.g. 5MB) and executes uploadFile.
+Verifies that the pipe successfully streams the contents without issues.
+Validates:
+  - large files are streamed cleanly
+  - uploaded content length and details match
+*/
+func TestVyOSTraceExecutorLargeUploadStreaming(t *testing.T) {
+	var receivedBytes int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(10 << 20)
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		n, _ := io.Copy(io.Discard, file)
+		receivedBytes = n
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	tempFile, err := os.CreateTemp("", "large-pcap-*.pcap")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	pcapPath := tempFile.Name()
+	defer os.Remove(pcapPath)
+
+	// Write a 5MB dummy data file
+	data := make([]byte, 5*1024*1024)
+	_, _ = tempFile.Write(data)
+	tempFile.Close()
+
+	exec := NewVyOSTraceExecutor(&fakeCommandRunner{}, server.Client())
+	err = exec.uploadFile(context.Background(), server.URL, pcapPath)
+	if err != nil {
+		t.Fatalf("upload failed: %v", err)
+	}
+
+	if receivedBytes != int64(len(data)) {
+		t.Fatalf("expected %d bytes, got %d", len(data), receivedBytes)
 	}
 }

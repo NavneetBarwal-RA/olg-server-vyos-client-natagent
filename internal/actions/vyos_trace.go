@@ -1,7 +1,6 @@
 package actions
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,12 +14,20 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/routerarchitects/nats-agent-core/agentcore"
 )
 
-var interfaceRegex = regexp.MustCompile(`^[a-z0-9\.\-]+$`)
+const (
+	maxDuration = 300
+	maxPackets  = 10000
+)
+
+var (
+	vyosInterfaceRegex = regexp.MustCompile(`^(eth|bond|dum|vlan|wlan|lo)[0-9]+(\.[0-9]+)?$`)
+)
 
 type Command interface {
 	Run() error
@@ -97,12 +104,33 @@ func (e *VyOSTraceExecutor) Execute(ctx context.Context, msg agentcore.ActionCom
 		return Output{}, fmt.Errorf("%w: failed to unmarshal payload: %v", ErrInvalidActionPayload, err)
 	}
 
+	// Validate parameter bounds
+	if payload.Duration > maxDuration {
+		return Output{}, fmt.Errorf("%w: duration %d exceeds maximum limit of %d seconds", ErrInvalidActionPayload, payload.Duration, maxDuration)
+	}
+	if payload.Packets > maxPackets {
+		return Output{}, fmt.Errorf("%w: packets %d exceeds maximum limit of %d", ErrInvalidActionPayload, payload.Packets, maxPackets)
+	}
+
 	// Validate interface
-	if len(payload.Interface) == 0 {
+	interfaceName := payload.Interface
+	if len(interfaceName) == 0 {
 		return Output{}, fmt.Errorf("%w: interface is required", ErrInvalidActionPayload)
 	}
-	if !interfaceRegex.MatchString(payload.Interface) {
-		return Output{}, fmt.Errorf("%w: invalid interface name %q", ErrInvalidActionPayload, payload.Interface)
+	if strings.Contains(interfaceName, "..") || strings.Contains(interfaceName, "/") || strings.Contains(interfaceName, "\\") {
+		return Output{}, fmt.Errorf("%w: invalid interface name %q", ErrInvalidActionPayload, interfaceName)
+	}
+
+	var interfaceValid bool
+	if _, err := os.Stat("/sys/class/net/" + interfaceName); err == nil {
+		interfaceValid = true
+	} else {
+		if vyosInterfaceRegex.MatchString(interfaceName) {
+			interfaceValid = true
+		}
+	}
+	if !interfaceValid {
+		return Output{}, fmt.Errorf("%w: invalid interface name %q", ErrInvalidActionPayload, interfaceName)
 	}
 
 	// Validate URI
@@ -114,8 +142,14 @@ func (e *VyOSTraceExecutor) Execute(ctx context.Context, msg agentcore.ActionCom
 		return Output{}, fmt.Errorf("%w: invalid upload uri %q", ErrInvalidActionPayload, payload.URI)
 	}
 
-	// Configure temporary PCAP file path
-	pcapPath := filepath.Join("/tmp", fmt.Sprintf("pcap-%s.pcap", msg.RPCID))
+	// Configure temporary PCAP file path securely
+	tempFile, err := os.CreateTemp("", "pcap-*.pcap")
+	if err != nil {
+		return Output{}, fmt.Errorf("create temporary pcap file: %w", err)
+	}
+	pcapPath := tempFile.Name()
+	tempFile.Close() // Immediately close so tcpdump can write to it
+
 	defer func() {
 		_ = os.Remove(pcapPath)
 	}()
@@ -178,32 +212,45 @@ func (e *VyOSTraceExecutor) Execute(ctx context.Context, msg agentcore.ActionCom
 }
 
 func (e *VyOSTraceExecutor) uploadFile(ctx context.Context, uri, filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("open pcap file: %w", err)
-	}
-	defer file.Close()
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	contentType := writer.FormDataContentType()
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
-	if err != nil {
-		return fmt.Errorf("create form file part: %w", err)
-	}
+	go func() {
+		var err error
+		defer func() {
+			if err != nil {
+				_ = pw.CloseWithError(err)
+			} else {
+				_ = pw.Close()
+			}
+		}()
 
-	if _, err := io.Copy(part, file); err != nil {
-		return fmt.Errorf("copy file data: %w", err)
-	}
+		file, err := os.Open(filePath)
+		if err != nil {
+			return
+		}
+		defer file.Close()
 
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close multipart writer: %w", err)
-	}
+		part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+		if err != nil {
+			return
+		}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", uri, &body)
+		if _, err = io.Copy(part, file); err != nil {
+			return
+		}
+
+		if err = writer.Close(); err != nil {
+			return
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", uri, pr)
 	if err != nil {
 		return fmt.Errorf("create upload request: %w", err)
 	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := e.client.Do(req)
 	if err != nil {

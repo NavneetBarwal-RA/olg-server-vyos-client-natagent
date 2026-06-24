@@ -304,23 +304,28 @@ func TestIntegrationActionTraceFlowWithMockExecutor(t *testing.T) {
 }
 
 type integrationActionTraceCommand struct {
-	runFunc func() error
+	pcapPath string
 }
 
 func (c *integrationActionTraceCommand) Run() error {
-	if c.runFunc != nil {
-		return c.runFunc()
+	if c.pcapPath != "" {
+		return os.WriteFile(c.pcapPath, []byte("mock-pcap-data"), 0o600)
 	}
 	return nil
 }
 
-type integrationActionTraceCommandRunner struct {
-	runFunc func() error
-}
+type integrationActionTraceCommandRunner struct{}
 
 func (r *integrationActionTraceCommandRunner) Command(ctx context.Context, name string, args ...string) actions.Command {
+	var pcapPath string
+	for i, arg := range args {
+		if arg == "-w" && i+1 < len(args) {
+			pcapPath = args[i+1]
+			break
+		}
+	}
 	return &integrationActionTraceCommand{
-		runFunc: r.runFunc,
+		pcapPath: pcapPath,
 	}
 }
 
@@ -357,12 +362,7 @@ func TestIntegrationActionTraceFlowRealModeMocked(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := &integrationActionTraceCommandRunner{
-		runFunc: func() error {
-			pcapPath := filepath.Join("/tmp", "pcap-"+rpcID+".pcap")
-			return os.WriteFile(pcapPath, []byte("mock-pcap-data"), 0o600)
-		},
-	}
+	runner := &integrationActionTraceCommandRunner{}
 
 	probe := newStartedProbe(t, cfg, target)
 	worker := newAgentCoreClient(t, cfg, "worker")
