@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/nats-io/nats.go v1.51.0
-	github.com/routerarchitects/nats-agent-core v0.1.0
+	github.com/routerarchitects/nats-agent-core v0.1.1-0.20260624122805-452347f36e31
 	github.com/routerarchitects/olg-renderer-vyos v0.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
